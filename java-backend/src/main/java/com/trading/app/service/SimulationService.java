@@ -1,10 +1,16 @@
 package com.trading.app.service;
 
-import com.trading.app.model.*;
+import com.trading.app.model.MarketData;
+import com.trading.app.model.Simulation;
+import com.trading.app.model.Strategy;
+import com.trading.app.model.Symbol;
+import com.trading.app.model.Trade;
 import com.trading.app.repository.SimulationRepository;
 import com.trading.app.repository.StrategyRepository;
 import com.trading.app.repository.SymbolRepository;
 import com.trading.app.repository.TradeRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -19,7 +25,9 @@ import java.util.stream.Collectors;
 
 @Service
 public class SimulationService {
-
+    
+    private static final Logger logger = LoggerFactory.getLogger(SimulationService.class);
+    
     @Autowired
     private SimulationRepository simulationRepository;
     
@@ -46,7 +54,7 @@ public class SimulationService {
      * Get active simulations for a user
      */
     public List<Simulation> getActiveSimulationsForUser(String userId) {
-        return simulationRepository.findByUserIdAndStatus(userId, "ACTIVE");
+        return simulationRepository.findByUserIdAndStatus(userId, "active");
     }
     
     /**
@@ -60,12 +68,20 @@ public class SimulationService {
      * Create a new simulation
      */
     public Simulation createSimulation(Simulation simulation) {
+        // Validate symbol and strategy
+        Optional<Symbol> symbolOpt = symbolRepository.findById(simulation.getSymbolId());
+        Optional<Strategy> strategyOpt = strategyRepository.findById(simulation.getStrategyId());
+        
+        if (symbolOpt.isEmpty() || strategyOpt.isEmpty()) {
+            throw new IllegalArgumentException("Invalid symbol or strategy ID");
+        }
+        
+        // Set initial values
         simulation.setStartTime(LocalDateTime.now());
-        simulation.setStatus("ACTIVE");
-        simulation.setCurrentValue(simulation.getInitialInvestment());
-        simulation.setProfitLoss(0);
-        simulation.setProfitLossPercentage(0);
-        simulation.setTotalTrades(0);
+        simulation.setStatus("active");
+        simulation.setCurrentBalance(simulation.getInitialInvestment());
+        simulation.setProfitLoss(0.0);
+        simulation.setProfitLossPercentage(0.0);
         
         return simulationRepository.save(simulation);
     }
@@ -76,40 +92,32 @@ public class SimulationService {
     public Optional<Simulation> updateSimulation(String id, Simulation simulationUpdates) {
         Optional<Simulation> simulationOpt = simulationRepository.findById(id);
         
-        if (simulationOpt.isPresent()) {
-            Simulation simulation = simulationOpt.get();
-            
-            // Only update allowed fields
-            if (simulationUpdates.getStatus() != null) {
-                simulation.setStatus(simulationUpdates.getStatus());
-                
-                // If simulation is completed or failed, set end time
-                if (simulationUpdates.getStatus().equals("COMPLETED") || 
-                    simulationUpdates.getStatus().equals("FAILED")) {
-                    simulation.setEndTime(LocalDateTime.now());
-                }
-            }
-            
-            if (simulationUpdates.getCurrentValue() > 0) {
-                simulation.setCurrentValue(simulationUpdates.getCurrentValue());
-            }
-            
-            if (simulationUpdates.getProfitLoss() != 0) {
-                simulation.setProfitLoss(simulationUpdates.getProfitLoss());
-            }
-            
-            if (simulationUpdates.getProfitLossPercentage() != 0) {
-                simulation.setProfitLossPercentage(simulationUpdates.getProfitLossPercentage());
-            }
-            
-            if (simulationUpdates.getTotalTrades() > 0) {
-                simulation.setTotalTrades(simulationUpdates.getTotalTrades());
-            }
-            
-            return Optional.of(simulationRepository.save(simulation));
+        if (simulationOpt.isEmpty()) {
+            return Optional.empty();
         }
         
-        return Optional.empty();
+        Simulation simulation = simulationOpt.get();
+        
+        // Update fields
+        if (simulationUpdates.getParameters() != null) {
+            simulation.setParameters(simulationUpdates.getParameters());
+        }
+        
+        if (simulationUpdates.getCurrentBalance() > 0) {
+            simulation.setCurrentBalance(simulationUpdates.getCurrentBalance());
+            simulation.updateProfitLoss();
+        }
+        
+        if (simulationUpdates.getStatus() != null) {
+            simulation.setStatus(simulationUpdates.getStatus());
+            
+            // If completed, set end time
+            if ("completed".equals(simulationUpdates.getStatus())) {
+                simulation.setEndTime(LocalDateTime.now());
+            }
+        }
+        
+        return Optional.of(simulationRepository.save(simulation));
     }
     
     /**
@@ -118,13 +126,14 @@ public class SimulationService {
     public Optional<Simulation> pauseSimulation(String id) {
         Optional<Simulation> simulationOpt = simulationRepository.findById(id);
         
-        if (simulationOpt.isPresent()) {
-            Simulation simulation = simulationOpt.get();
-            simulation.setStatus("PAUSED");
-            return Optional.of(simulationRepository.save(simulation));
+        if (simulationOpt.isEmpty()) {
+            return Optional.empty();
         }
         
-        return Optional.empty();
+        Simulation simulation = simulationOpt.get();
+        simulation.pause();
+        
+        return Optional.of(simulationRepository.save(simulation));
     }
     
     /**
@@ -133,13 +142,14 @@ public class SimulationService {
     public Optional<Simulation> resumeSimulation(String id) {
         Optional<Simulation> simulationOpt = simulationRepository.findById(id);
         
-        if (simulationOpt.isPresent()) {
-            Simulation simulation = simulationOpt.get();
-            simulation.setStatus("ACTIVE");
-            return Optional.of(simulationRepository.save(simulation));
+        if (simulationOpt.isEmpty()) {
+            return Optional.empty();
         }
         
-        return Optional.empty();
+        Simulation simulation = simulationOpt.get();
+        simulation.resume();
+        
+        return Optional.of(simulationRepository.save(simulation));
     }
     
     /**
@@ -148,14 +158,14 @@ public class SimulationService {
     public Optional<Simulation> stopSimulation(String id) {
         Optional<Simulation> simulationOpt = simulationRepository.findById(id);
         
-        if (simulationOpt.isPresent()) {
-            Simulation simulation = simulationOpt.get();
-            simulation.setStatus("COMPLETED");
-            simulation.setEndTime(LocalDateTime.now());
-            return Optional.of(simulationRepository.save(simulation));
+        if (simulationOpt.isEmpty()) {
+            return Optional.empty();
         }
         
-        return Optional.empty();
+        Simulation simulation = simulationOpt.get();
+        simulation.complete();
+        
+        return Optional.of(simulationRepository.save(simulation));
     }
     
     /**
@@ -169,19 +179,16 @@ public class SimulationService {
      * Get recent trades for a simulation
      */
     public List<Trade> getRecentTradesForSimulation(String simulationId, int limit) {
-        return tradeRepository.findLatestBySimulationId(
-                simulationId, 
-                PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "timestamp"))
-        );
+        return tradeRepository.findBySimulationIdOrderByTimestampDesc(
+                simulationId, PageRequest.of(0, limit));
     }
     
     /**
-     * Get recent trades for a user across all simulations
+     * Get recent trades for a user
      */
     public List<Trade> getRecentTradesForUser(String userId, int limit) {
-        // Get all simulation IDs for this user
-        List<String> simulationIds = simulationRepository.findByUserId(userId)
-                .stream()
+        List<Simulation> simulations = simulationRepository.findByUserId(userId);
+        List<String> simulationIds = simulations.stream()
                 .map(Simulation::getId)
                 .collect(Collectors.toList());
         
@@ -189,416 +196,273 @@ public class SimulationService {
             return new ArrayList<>();
         }
         
-        // Get recent trades across all simulations
-        return tradeRepository.findBySimulationIds(
-                simulationIds,
-                PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "timestamp"))
-        );
+        return tradeRepository.findBySimulationIdsOrderByTimestampDesc(
+                simulationIds, PageRequest.of(0, limit));
     }
     
     /**
      * Execute a trade for a simulation
      */
     public Trade executeTrade(Trade trade) {
-        // Save the trade
-        Trade savedTrade = tradeRepository.save(trade);
-        
-        // Update the simulation
         Optional<Simulation> simulationOpt = simulationRepository.findById(trade.getSimulationId());
         
-        if (simulationOpt.isPresent()) {
-            Simulation simulation = simulationOpt.get();
-            
-            // Update total trades
-            simulation.setTotalTrades(simulation.getTotalTrades() + 1);
-            
-            // Update current value and profit/loss
-            double newValue = simulation.getCurrentValue();
-            if (trade.getType().equals("BUY")) {
-                newValue -= trade.getAmount();
-            } else {
-                newValue += trade.getAmount();
-            }
-            
-            simulation.setCurrentValue(newValue);
-            
-            // Calculate profit/loss
-            double profitLoss = simulation.getCurrentValue() - simulation.getInitialInvestment();
-            double profitLossPercentage = (profitLoss / simulation.getInitialInvestment()) * 100;
-            
-            simulation.setProfitLoss(profitLoss);
-            simulation.setProfitLossPercentage(profitLossPercentage);
-            
-            simulationRepository.save(simulation);
+        if (simulationOpt.isEmpty()) {
+            throw new IllegalArgumentException("Invalid simulation ID");
         }
         
-        return savedTrade;
+        Simulation simulation = simulationOpt.get();
+        
+        // Check if the simulation is active
+        if (!simulation.isActive()) {
+            throw new IllegalStateException("Simulation is not active");
+        }
+        
+        // Set the status to executed
+        trade.execute();
+        
+        // Update the simulation balance and statistics
+        double tradeAmount = trade.getAmount();
+        
+        if (trade.isBuy()) {
+            // For buy trades, subtract the amount from the balance
+            if (tradeAmount > simulation.getCurrentBalance()) {
+                throw new IllegalStateException("Insufficient balance for trade");
+            }
+            
+            simulation.setCurrentBalance(simulation.getCurrentBalance() - tradeAmount);
+        } else {
+            // For sell trades, add the amount to the balance and calculate profit/loss
+            simulation.setCurrentBalance(simulation.getCurrentBalance() + tradeAmount);
+            
+            // Calculate profit/loss for this trade
+            // This is simplified - in a real system, you would need to track position sizes
+            double profitLoss = trade.getProfitLoss();
+            if (profitLoss > 0) {
+                simulation.incrementSuccessfulTrades();
+            }
+        }
+        
+        simulation.incrementTotalTrades();
+        simulation.updateProfitLoss();
+        
+        // Save the simulation and trade
+        simulationRepository.save(simulation);
+        return tradeRepository.save(trade);
     }
     
     /**
-     * Generate trading signals and execute trades for active simulations
-     * This method is scheduled to run at a fixed interval
+     * Process active simulations - called by scheduler
      */
-    @Scheduled(fixedRate = 60000) // Run every minute
+    @Scheduled(cron = "${scheduler.simulation-process.cron}")
     public void processActiveSimulations() {
-        // Get all active simulations
-        List<Simulation> activeSimulations = simulationRepository.findByUserIdAndStatus(null, "ACTIVE");
+        logger.info("Processing active simulations...");
+        
+        List<Simulation> activeSimulations = simulationRepository.findByStatus("active");
         
         for (Simulation simulation : activeSimulations) {
             try {
-                // Get the symbol
-                Optional<Symbol> symbolOpt = symbolRepository.findById(simulation.getSymbolId());
-                if (symbolOpt.isEmpty()) {
-                    continue;
-                }
-                Symbol symbol = symbolOpt.get();
-                
-                // Get the strategy
-                Optional<Strategy> strategyOpt = strategyRepository.findById(simulation.getStrategyId());
-                if (strategyOpt.isEmpty()) {
-                    continue;
-                }
-                Strategy strategy = strategyOpt.get();
-                
-                // Get the latest market data
-                Optional<MarketData> latestDataOpt = marketDataService.getLatestMarketData(symbol.getId());
-                if (latestDataOpt.isEmpty()) {
-                    // Fetch latest market data if not available
-                    try {
-                        marketDataService.fetchAndSaveLatestMarketData(symbol.getSymbol());
-                        latestDataOpt = marketDataService.getLatestMarketData(symbol.getId());
-                        if (latestDataOpt.isEmpty()) {
-                            continue;
-                        }
-                    } catch (Exception e) {
-                        continue;
-                    }
-                }
-                MarketData latestData = latestDataOpt.get();
-                
-                // Get historical data for strategy calculation
-                List<MarketData> historicalData = marketDataService.getHistoricalMarketData(symbol.getId(), 100);
-                
-                // Generate trading signal based on strategy
-                String signal = generateTradingSignal(strategy, historicalData);
-                
-                if (!signal.equals("HOLD")) {
-                    // Get recent trades to avoid duplicate signals
-                    List<Trade> recentTrades = getRecentTradesForSimulation(simulation.getId(), 5);
-                    
-                    // Skip if the same signal was generated recently
-                    boolean duplicateSignal = recentTrades.stream()
-                            .anyMatch(trade -> trade.getType().equals(signal) &&
-                                    trade.getTimestamp().isAfter(LocalDateTime.now().minusHours(1)));
-                    
-                    if (!duplicateSignal) {
-                        // Calculate trade amount and quantity
-                        double availableFunds = simulation.getCurrentValue();
-                        double price = latestData.getClose();
-                        int quantity = 0;
-                        double amount = 0;
-                        
-                        if (signal.equals("BUY")) {
-                            // Use 10% of available funds for each trade
-                            amount = availableFunds * 0.1;
-                            quantity = (int) (amount / price);
-                            
-                            // Skip if not enough funds or quantity is zero
-                            if (amount > availableFunds || quantity == 0) {
-                                continue;
-                            }
-                        } else {
-                            // For sell signals, calculate based on latest buy trade
-                            Optional<Trade> lastBuyTrade = recentTrades.stream()
-                                    .filter(trade -> trade.getType().equals("BUY"))
-                                    .findFirst();
-                            
-                            if (lastBuyTrade.isPresent()) {
-                                quantity = lastBuyTrade.get().getQuantity();
-                                amount = quantity * price;
-                            } else {
-                                continue;
-                            }
-                        }
-                        
-                        // Create and execute the trade
-                        Trade trade = new Trade();
-                        trade.setSimulationId(simulation.getId());
-                        trade.setTimestamp(LocalDateTime.now());
-                        trade.setType(signal);
-                        trade.setPrice(price);
-                        trade.setQuantity(quantity);
-                        trade.setAmount(amount);
-                        trade.setStatus("EXECUTED");
-                        trade.setReason(strategy.getName() + " signal");
-                        
-                        // Calculate profit/loss for sell trades
-                        if (signal.equals("SELL")) {
-                            Optional<Trade> lastBuyTrade = recentTrades.stream()
-                                    .filter(t -> t.getType().equals("BUY"))
-                                    .findFirst();
-                            
-                            if (lastBuyTrade.isPresent()) {
-                                double buyAmount = lastBuyTrade.get().getAmount();
-                                double profitLoss = amount - buyAmount;
-                                double profitLossPercentage = (profitLoss / buyAmount) * 100;
-                                
-                                trade.setProfitLoss(profitLoss);
-                                trade.setProfitLossPercentage(profitLossPercentage);
-                            }
-                        }
-                        
-                        executeTrade(trade);
-                    }
-                }
-                
+                processSimulation(simulation);
             } catch (Exception e) {
-                // Log error and continue with next simulation
-                System.err.println("Error processing simulation " + simulation.getId() + ": " + e.getMessage());
+                logger.error("Error processing simulation {}: {}", simulation.getId(), e.getMessage());
             }
         }
     }
     
     /**
-     * Generate a trading signal based on a strategy and historical data
-     * 
-     * @param strategy The trading strategy
-     * @param historicalData Historical market data
-     * @return "BUY", "SELL", or "HOLD"
+     * Process a single simulation
      */
-    private String generateTradingSignal(Strategy strategy, List<MarketData> historicalData) {
-        if (historicalData.isEmpty()) {
-            return "HOLD";
+    private void processSimulation(Simulation simulation) {
+        // Get the symbol and strategy
+        Optional<Symbol> symbolOpt = symbolRepository.findById(simulation.getSymbolId());
+        Optional<Strategy> strategyOpt = strategyRepository.findById(simulation.getStrategyId());
+        
+        if (symbolOpt.isEmpty() || strategyOpt.isEmpty()) {
+            logger.error("Symbol or strategy not found for simulation {}", simulation.getId());
+            return;
         }
+        
+        Symbol symbol = symbolOpt.get();
+        Strategy strategy = strategyOpt.get();
+        
+        // Get the latest market data
+        Optional<MarketData> marketDataOpt = marketDataService.getLatestMarketData(symbol.getId());
+        
+        if (marketDataOpt.isEmpty()) {
+            try {
+                // Fetch latest market data if not available
+                MarketData newData = marketDataService.fetchAndSaveLatestMarketData(symbol.getCode());
+                marketDataOpt = Optional.of(newData);
+            } catch (Exception e) {
+                logger.error("Error fetching market data for symbol {}: {}", symbol.getCode(), e.getMessage());
+                return;
+            }
+        }
+        
+        MarketData marketData = marketDataOpt.get();
+        
+        // Apply the strategy to determine if a trade should be made
+        Optional<Trade> tradeOpt = applyStrategy(simulation, symbol, strategy, marketData);
+        
+        // Execute the trade if one was generated
+        tradeOpt.ifPresent(trade -> {
+            try {
+                executeTrade(trade);
+                logger.info("Executed trade for simulation {}: {}", simulation.getId(), trade);
+            } catch (Exception e) {
+                logger.error("Error executing trade for simulation {}: {}", simulation.getId(), e.getMessage());
+            }
+        });
+    }
+    
+    /**
+     * Apply a strategy to determine if a trade should be made
+     */
+    private Optional<Trade> applyStrategy(Simulation simulation, Symbol symbol, Strategy strategy, MarketData marketData) {
+        // This is where you would implement the logic for the various strategies
+        // For now, we'll just implement a simple moving average crossover strategy
         
         String strategyName = strategy.getName();
-        Strategy.StrategyParameters params = strategy.getParameters();
         
         if ("Moving Average Crossover".equals(strategyName)) {
-            return generateMovingAverageCrossoverSignal(historicalData, params.getFastPeriod(), params.getSlowPeriod());
-        } else if ("MACD Crossover".equals(strategyName)) {
-            return generateMACDSignal(historicalData, params.getFastPeriod(), params.getSlowPeriod(), params.getSignalPeriod());
+            return applyMovingAverageCrossoverStrategy(simulation, symbol, strategy, marketData);
         } else if ("RSI Overbought/Oversold".equals(strategyName)) {
-            return generateRSISignal(historicalData, params.getFastPeriod(), params.getBuyThreshold(), params.getSellThreshold());
-        } else if ("Bollinger Bands".equals(strategyName)) {
-            return generateBollingerBandsSignal(historicalData, params.getFastPeriod(), params.getSlowPeriod());
+            return applyRSIStrategy(simulation, symbol, strategy, marketData);
+        } else if ("MACD Signal Line Crossover".equals(strategyName)) {
+            return applyMACDStrategy(simulation, symbol, strategy, marketData);
+        } else if ("Bollinger Bands Breakout".equals(strategyName)) {
+            return applyBollingerBandsStrategy(simulation, symbol, strategy, marketData);
         }
         
-        return "HOLD";
+        // No trade for unsupported strategies
+        return Optional.empty();
     }
     
     /**
-     * Generate Moving Average Crossover signal
+     * Apply the Moving Average Crossover strategy
      */
-    private String generateMovingAverageCrossoverSignal(List<MarketData> historicalData, int fastPeriod, int slowPeriod) {
-        if (historicalData.size() < slowPeriod + 2) {
-            return "HOLD";
+    private Optional<Trade> applyMovingAverageCrossoverStrategy(Simulation simulation, Symbol symbol, Strategy strategy, MarketData marketData) {
+        // In a real system, you would calculate the moving averages here
+        // For now, we'll just generate a random trading signal for demonstration purposes
+        
+        // Get strategy parameters
+        Map<String, Object> parameters = strategy.getParameters();
+        int fastPeriod = (int) parameters.get("fastPeriod");
+        int slowPeriod = (int) parameters.get("slowPeriod");
+        double buyThreshold = (double) parameters.get("buyThreshold");
+        double sellThreshold = (double) parameters.get("sellThreshold");
+        
+        // Get historical data to calculate moving averages
+        try {
+            List<MarketData> historicalData = marketDataService.getHistoricalMarketData(symbol.getId(), slowPeriod + 10);
+            
+            if (historicalData.size() < slowPeriod) {
+                return Optional.empty();
+            }
+            
+            // Calculate the fast and slow moving averages
+            double fastMA = calculateSimpleMovingAverage(historicalData, fastPeriod);
+            double slowMA = calculateSimpleMovingAverage(historicalData, slowPeriod);
+            
+            // Determine if we should buy or sell
+            double crossoverValue = (fastMA - slowMA) / slowMA;
+            
+            if (crossoverValue > buyThreshold) {
+                // Buy signal
+                double price = marketData.getClose();
+                double amount = calculateTradeAmount(simulation, price);
+                
+                if (amount <= 0) {
+                    return Optional.empty();
+                }
+                
+                double quantity = amount / price;
+                
+                Trade trade = new Trade(simulation.getId(), "buy", price, quantity);
+                trade.setReason("Moving Average Crossover: Fast MA > Slow MA by " + crossoverValue);
+                
+                return Optional.of(trade);
+            } else if (crossoverValue < sellThreshold) {
+                // Sell signal
+                double price = marketData.getClose();
+                
+                // In a real system, you would check the current position size
+                // For now, we'll just sell a fixed amount
+                double quantity = 1.0;
+                
+                Trade trade = new Trade(simulation.getId(), "sell", price, quantity);
+                trade.setReason("Moving Average Crossover: Fast MA < Slow MA by " + crossoverValue);
+                
+                return Optional.of(trade);
+            }
+            
+            return Optional.empty();
+        } catch (Exception e) {
+            logger.error("Error applying Moving Average Crossover strategy: {}", e.getMessage());
+            return Optional.empty();
         }
-        
-        // Calculate fast MA and slow MA
-        double[] fastMA = calculateSMA(historicalData, fastPeriod);
-        double[] slowMA = calculateSMA(historicalData, slowPeriod);
-        
-        // Check for crossover
-        if (fastMA[1] < slowMA[1] && fastMA[0] > slowMA[0]) {
-            return "BUY";
-        } else if (fastMA[1] > slowMA[1] && fastMA[0] < slowMA[0]) {
-            return "SELL";
-        }
-        
-        return "HOLD";
     }
     
     /**
-     * Generate MACD signal
+     * Apply the RSI Overbought/Oversold strategy
      */
-    private String generateMACDSignal(List<MarketData> historicalData, int fastPeriod, int slowPeriod, int signalPeriod) {
-        if (historicalData.size() < slowPeriod + signalPeriod + 2) {
-            return "HOLD";
-        }
-        
-        // Calculate MACD line and signal line
-        double[] macdLine = calculateMACD(historicalData, fastPeriod, slowPeriod);
-        double[] signalLine = calculateSignalLine(macdLine, signalPeriod);
-        
-        // Check for crossover
-        if (macdLine[1] < signalLine[1] && macdLine[0] > signalLine[0]) {
-            return "BUY";
-        } else if (macdLine[1] > signalLine[1] && macdLine[0] < signalLine[0]) {
-            return "SELL";
-        }
-        
-        return "HOLD";
+    private Optional<Trade> applyRSIStrategy(Simulation simulation, Symbol symbol, Strategy strategy, MarketData marketData) {
+        // This would be implemented in a similar way to the Moving Average Crossover strategy
+        // For now, we'll just return empty to indicate no trade
+        return Optional.empty();
     }
     
     /**
-     * Generate RSI signal
+     * Apply the MACD Signal Line Crossover strategy
      */
-    private String generateRSISignal(List<MarketData> historicalData, int period, double oversold, double overbought) {
-        if (historicalData.size() < period + 1) {
-            return "HOLD";
-        }
-        
-        double rsi = calculateRSI(historicalData, period);
-        
-        if (rsi < oversold) {
-            return "BUY";
-        } else if (rsi > overbought) {
-            return "SELL";
-        }
-        
-        return "HOLD";
+    private Optional<Trade> applyMACDStrategy(Simulation simulation, Symbol symbol, Strategy strategy, MarketData marketData) {
+        // This would be implemented in a similar way to the Moving Average Crossover strategy
+        // For now, we'll just return empty to indicate no trade
+        return Optional.empty();
     }
     
     /**
-     * Generate Bollinger Bands signal
+     * Apply the Bollinger Bands Breakout strategy
      */
-    private String generateBollingerBandsSignal(List<MarketData> historicalData, int period, double stdDev) {
-        if (historicalData.size() < period + 1) {
-            return "HOLD";
-        }
-        
-        // Calculate SMA
-        double[] sma = calculateSMA(historicalData, period);
-        double middleBand = sma[0];
-        
-        // Calculate standard deviation
-        double standardDeviation = calculateStandardDeviation(historicalData, period, middleBand);
-        
-        // Calculate upper and lower bands
-        double upperBand = middleBand + (standardDeviation * stdDev);
-        double lowerBand = middleBand - (standardDeviation * stdDev);
-        
-        // Get current price
-        double currentPrice = historicalData.get(0).getClose();
-        
-        // Generate signal
-        if (currentPrice < lowerBand) {
-            return "BUY";
-        } else if (currentPrice > upperBand) {
-            return "SELL";
-        }
-        
-        return "HOLD";
+    private Optional<Trade> applyBollingerBandsStrategy(Simulation simulation, Symbol symbol, Strategy strategy, MarketData marketData) {
+        // This would be implemented in a similar way to the Moving Average Crossover strategy
+        // For now, we'll just return empty to indicate no trade
+        return Optional.empty();
     }
     
     /**
-     * Calculate Simple Moving Average (SMA)
+     * Calculate a simple moving average from historical market data
      */
-    private double[] calculateSMA(List<MarketData> data, int period) {
-        double[] result = new double[2]; // [current, previous]
+    private double calculateSimpleMovingAverage(List<MarketData> data, int period) {
+        if (data.size() < period) {
+            throw new IllegalArgumentException("Not enough data points for period " + period);
+        }
         
-        // Calculate current SMA
         double sum = 0;
         for (int i = 0; i < period; i++) {
-            if (i < data.size()) {
-                sum += data.get(i).getClose();
-            }
+            sum += data.get(i).getClose();
         }
-        result[0] = sum / period;
         
-        // Calculate previous SMA
-        sum = 0;
-        for (int i = 1; i < period + 1; i++) {
-            if (i < data.size()) {
-                sum += data.get(i).getClose();
-            }
-        }
-        result[1] = sum / period;
-        
-        return result;
+        return sum / period;
     }
     
     /**
-     * Calculate MACD line
+     * Calculate the amount for a trade based on the simulation's current balance
      */
-    private double[] calculateMACD(List<MarketData> data, int fastPeriod, int slowPeriod) {
-        double[] result = new double[2]; // [current, previous]
+    private double calculateTradeAmount(Simulation simulation, double price) {
+        // In a real system, you would implement position sizing logic here
+        // For now, we'll just use a fixed percentage of the current balance
         
-        // Calculate current EMA
-        double fastEMA = calculateEMA(data, fastPeriod, 0);
-        double slowEMA = calculateEMA(data, slowPeriod, 0);
-        result[0] = fastEMA - slowEMA;
+        double percentOfBalance = 0.1; // 10% of current balance
+        double amount = simulation.getCurrentBalance() * percentOfBalance;
         
-        // Calculate previous EMA
-        fastEMA = calculateEMA(data, fastPeriod, 1);
-        slowEMA = calculateEMA(data, slowPeriod, 1);
-        result[1] = fastEMA - slowEMA;
-        
-        return result;
-    }
-    
-    /**
-     * Calculate Signal line for MACD
-     */
-    private double[] calculateSignalLine(double[] macdLine, int signalPeriod) {
-        double[] result = new double[2]; // [current, previous]
-        
-        // Simple implementation - in a real system, you would calculate EMA of MACD line
-        result[0] = macdLine[0] * 0.2 + macdLine[1] * 0.8;
-        result[1] = macdLine[1];
-        
-        return result;
-    }
-    
-    /**
-     * Calculate Exponential Moving Average (EMA)
-     */
-    private double calculateEMA(List<MarketData> data, int period, int offset) {
-        // Simple implementation - in a real system, this would be more complex
-        double alpha = 2.0 / (period + 1);
-        double ema = data.get(offset).getClose();
-        
-        for (int i = offset + 1; i < offset + period && i < data.size(); i++) {
-            ema = data.get(i).getClose() * alpha + ema * (1 - alpha);
+        // Ensure we have enough balance
+        if (amount <= 0) {
+            return 0;
         }
         
-        return ema;
-    }
-    
-    /**
-     * Calculate Relative Strength Index (RSI)
-     */
-    private double calculateRSI(List<MarketData> data, int period) {
-        if (data.size() <= period) {
-            return 50; // Default value if not enough data
-        }
+        // Round to the nearest tradable amount
+        amount = Math.floor(amount / price) * price;
         
-        double avgGain = 0;
-        double avgLoss = 0;
-        
-        // Calculate initial average gain/loss
-        for (int i = 1; i <= period; i++) {
-            double change = data.get(i-1).getClose() - data.get(i).getClose();
-            if (change >= 0) {
-                avgGain += change;
-            } else {
-                avgLoss += Math.abs(change);
-            }
-        }
-        
-        avgGain /= period;
-        avgLoss /= period;
-        
-        // Calculate RS and RSI
-        double rs = avgGain / Math.max(avgLoss, 0.001); // Avoid division by zero
-        double rsi = 100 - (100 / (1 + rs));
-        
-        return rsi;
-    }
-    
-    /**
-     * Calculate Standard Deviation
-     */
-    private double calculateStandardDeviation(List<MarketData> data, int period, double mean) {
-        double variance = 0;
-        
-        for (int i = 0; i < period && i < data.size(); i++) {
-            double diff = data.get(i).getClose() - mean;
-            variance += diff * diff;
-        }
-        
-        variance /= period;
-        return Math.sqrt(variance);
+        return amount;
     }
 }
