@@ -2,267 +2,397 @@ package com.trading.app.service;
 
 import com.trading.app.model.MarketData;
 import com.trading.app.model.Symbol;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 @Service
 public class AlphaVantageService {
-
-    @Value("${alpha.vantage.api.key}")
+    
+    private static final Logger logger = LoggerFactory.getLogger(AlphaVantageService.class);
+    
+    @Value("${api.alpha-vantage.key}")
     private String apiKey;
     
-    @Value("${alpha.vantage.api.baseUrl}")
+    @Value("${api.alpha-vantage.base-url}")
     private String baseUrl;
     
-    private final RestTemplate restTemplate;
+    @Autowired
+    private RestTemplate restTemplate;
     
-    public AlphaVantageService() {
-        this.restTemplate = new RestTemplate();
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    
+    /**
+     * Check if the Alpha Vantage API is working
+     */
+    public boolean isApiWorking() {
+        try {
+            String url = baseUrl;
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("function", "TIME_SERIES_INTRADAY")
+                    .queryParam("symbol", "RELIANCE.BSE")
+                    .queryParam("interval", "5min")
+                    .queryParam("apikey", apiKey);
+            
+            ResponseEntity<Map> response = restTemplate.getForEntity(
+                    builder.toUriString(),
+                    Map.class
+            );
+            
+            return response.getStatusCode().is2xxSuccessful() && !response.getBody().containsKey("Error Message");
+        } catch (Exception e) {
+            logger.error("Error checking Alpha Vantage API: {}", e.getMessage());
+            return false;
+        }
     }
     
     /**
      * Search for symbols
      */
-    public List<Map<String, Object>> searchSymbols(String keywords) {
-        String url = baseUrl + "/query?function=SYMBOL_SEARCH&keywords=" + keywords + "&apikey=" + apiKey;
-        
-        Map<String, Object> response = restTemplate.getForObject(url, Map.class);
-        List<Map<String, Object>> result = new ArrayList<>();
-        
-        if (response != null && response.containsKey("bestMatches")) {
-            result = (List<Map<String, Object>>) response.get("bestMatches");
+    public List<Map<String, Object>> searchSymbols(String query) throws Exception {
+        try {
+            String url = baseUrl;
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("function", "SYMBOL_SEARCH")
+                    .queryParam("keywords", query)
+                    .queryParam("apikey", apiKey);
+            
+            ResponseEntity<Map> response = restTemplate.getForEntity(
+                    builder.toUriString(),
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to search symbols: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            
+            if (data.containsKey("Error Message")) {
+                throw new Exception("Alpha Vantage API error: " + data.get("Error Message"));
+            }
+            
+            List<Map<String, Object>> matches = (List<Map<String, Object>>) data.get("bestMatches");
+            
+            if (matches == null) {
+                return new ArrayList<>();
+            }
+            
+            // Filter to get only Indian stocks
+            List<Map<String, Object>> filteredMatches = new ArrayList<>();
+            
+            for (Map<String, Object> match : matches) {
+                String region = (String) match.get("4. region");
+                if ("India".equals(region)) {
+                    filteredMatches.add(match);
+                }
+            }
+            
+            return filteredMatches;
+        } catch (Exception e) {
+            logger.error("Error searching symbols in Alpha Vantage: {}", e.getMessage());
+            throw e;
         }
-        
-        return result;
     }
     
     /**
      * Get intraday data for a symbol
      */
-    public Map<String, Object> getIntradayData(String symbol, String interval) {
-        String url = baseUrl + "/query?function=TIME_SERIES_INTRADAY&symbol=" + symbol + 
-                "&interval=" + interval + "&apikey=" + apiKey;
-        
-        return restTemplate.getForObject(url, Map.class);
+    public List<Map<String, Object>> getIntradayData(String symbol, String interval) throws Exception {
+        try {
+            String url = baseUrl;
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("function", "TIME_SERIES_INTRADAY")
+                    .queryParam("symbol", symbol)
+                    .queryParam("interval", interval)
+                    .queryParam("outputsize", "compact")
+                    .queryParam("apikey", apiKey);
+            
+            ResponseEntity<Map> response = restTemplate.getForEntity(
+                    builder.toUriString(),
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get intraday data: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            
+            if (data.containsKey("Error Message")) {
+                throw new Exception("Alpha Vantage API error: " + data.get("Error Message"));
+            }
+            
+            String timeSeriesKey = "Time Series (" + interval + ")";
+            Map<String, Map<String, String>> timeSeries = (Map<String, Map<String, String>>) data.get(timeSeriesKey);
+            
+            if (timeSeries == null) {
+                throw new Exception("No intraday data found for symbol: " + symbol);
+            }
+            
+            List<Map<String, Object>> intradayData = new ArrayList<>();
+            
+            for (Map.Entry<String, Map<String, String>> entry : timeSeries.entrySet()) {
+                String timestamp = entry.getKey();
+                Map<String, String> values = entry.getValue();
+                
+                Map<String, Object> dataPoint = new HashMap<>();
+                dataPoint.put("timestamp", timestamp);
+                dataPoint.put("open", Double.parseDouble(values.get("1. open")));
+                dataPoint.put("high", Double.parseDouble(values.get("2. high")));
+                dataPoint.put("low", Double.parseDouble(values.get("3. low")));
+                dataPoint.put("close", Double.parseDouble(values.get("4. close")));
+                dataPoint.put("volume", Double.parseDouble(values.get("5. volume")));
+                
+                intradayData.add(dataPoint);
+            }
+            
+            return intradayData;
+        } catch (Exception e) {
+            logger.error("Error getting intraday data from Alpha Vantage: {}", e.getMessage());
+            throw e;
+        }
     }
     
     /**
      * Get daily data for a symbol
      */
-    public Map<String, Object> getDailyData(String symbol) {
-        String url = baseUrl + "/query?function=TIME_SERIES_DAILY&symbol=" + symbol + 
-                "&apikey=" + apiKey;
-        
-        return restTemplate.getForObject(url, Map.class);
+    public List<Map<String, Object>> getDailyData(String symbol) throws Exception {
+        try {
+            String url = baseUrl;
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("function", "TIME_SERIES_DAILY")
+                    .queryParam("symbol", symbol)
+                    .queryParam("outputsize", "compact")
+                    .queryParam("apikey", apiKey);
+            
+            ResponseEntity<Map> response = restTemplate.getForEntity(
+                    builder.toUriString(),
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get daily data: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            
+            if (data.containsKey("Error Message")) {
+                throw new Exception("Alpha Vantage API error: " + data.get("Error Message"));
+            }
+            
+            Map<String, Map<String, String>> timeSeries = (Map<String, Map<String, String>>) data.get("Time Series (Daily)");
+            
+            if (timeSeries == null) {
+                throw new Exception("No daily data found for symbol: " + symbol);
+            }
+            
+            List<Map<String, Object>> dailyData = new ArrayList<>();
+            
+            for (Map.Entry<String, Map<String, String>> entry : timeSeries.entrySet()) {
+                String timestamp = entry.getKey();
+                Map<String, String> values = entry.getValue();
+                
+                Map<String, Object> dataPoint = new HashMap<>();
+                dataPoint.put("timestamp", timestamp);
+                dataPoint.put("open", Double.parseDouble(values.get("1. open")));
+                dataPoint.put("high", Double.parseDouble(values.get("2. high")));
+                dataPoint.put("low", Double.parseDouble(values.get("3. low")));
+                dataPoint.put("close", Double.parseDouble(values.get("4. close")));
+                dataPoint.put("volume", Double.parseDouble(values.get("5. volume")));
+                
+                dailyData.add(dataPoint);
+            }
+            
+            return dailyData;
+        } catch (Exception e) {
+            logger.error("Error getting daily data from Alpha Vantage: {}", e.getMessage());
+            throw e;
+        }
     }
     
     /**
-     * Get weekly data for a symbol
+     * Get company overview for a symbol
      */
-    public Map<String, Object> getWeeklyData(String symbol) {
-        String url = baseUrl + "/query?function=TIME_SERIES_WEEKLY&symbol=" + symbol + 
-                "&apikey=" + apiKey;
-        
-        return restTemplate.getForObject(url, Map.class);
-    }
-    
-    /**
-     * Get monthly data for a symbol
-     */
-    public Map<String, Object> getMonthlyData(String symbol) {
-        String url = baseUrl + "/query?function=TIME_SERIES_MONTHLY&symbol=" + symbol + 
-                "&apikey=" + apiKey;
-        
-        return restTemplate.getForObject(url, Map.class);
+    public Map<String, Object> getCompanyOverview(String symbol) throws Exception {
+        try {
+            String url = baseUrl;
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("function", "OVERVIEW")
+                    .queryParam("symbol", symbol)
+                    .queryParam("apikey", apiKey);
+            
+            ResponseEntity<Map> response = restTemplate.getForEntity(
+                    builder.toUriString(),
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get company overview: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            
+            if (data == null || data.isEmpty() || data.containsKey("Error Message")) {
+                throw new Exception("No company overview found for symbol: " + symbol);
+            }
+            
+            return data;
+        } catch (Exception e) {
+            logger.error("Error getting company overview from Alpha Vantage: {}", e.getMessage());
+            throw e;
+        }
     }
     
     /**
      * Get quote for a symbol
      */
-    public Map<String, Object> getQuote(String symbol) {
-        String url = baseUrl + "/query?function=GLOBAL_QUOTE&symbol=" + symbol + 
-                "&apikey=" + apiKey;
-        
-        return restTemplate.getForObject(url, Map.class);
+    public Map<String, Object> getQuote(String symbol) throws Exception {
+        try {
+            String url = baseUrl;
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("function", "GLOBAL_QUOTE")
+                    .queryParam("symbol", symbol)
+                    .queryParam("apikey", apiKey);
+            
+            ResponseEntity<Map> response = restTemplate.getForEntity(
+                    builder.toUriString(),
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get quote: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            
+            if (data.containsKey("Error Message")) {
+                throw new Exception("Alpha Vantage API error: " + data.get("Error Message"));
+            }
+            
+            Map<String, String> quote = (Map<String, String>) data.get("Global Quote");
+            
+            if (quote == null || quote.isEmpty()) {
+                throw new Exception("No quote found for symbol: " + symbol);
+            }
+            
+            // Convert the quote to a simpler format
+            Map<String, Object> formattedQuote = new HashMap<>();
+            formattedQuote.put("symbol", quote.get("01. symbol"));
+            formattedQuote.put("open", Double.parseDouble(quote.get("02. open")));
+            formattedQuote.put("high", Double.parseDouble(quote.get("03. high")));
+            formattedQuote.put("low", Double.parseDouble(quote.get("04. low")));
+            formattedQuote.put("price", Double.parseDouble(quote.get("05. price")));
+            formattedQuote.put("volume", Double.parseDouble(quote.get("06. volume")));
+            formattedQuote.put("date", quote.get("07. latest trading day"));
+            formattedQuote.put("previous", Double.parseDouble(quote.get("08. previous close")));
+            formattedQuote.put("change", Double.parseDouble(quote.get("09. change")));
+            formattedQuote.put("changePercent", quote.get("10. change percent"));
+            
+            return formattedQuote;
+        } catch (Exception e) {
+            logger.error("Error getting quote from Alpha Vantage: {}", e.getMessage());
+            throw e;
+        }
     }
     
     /**
-     * Convert Alpha Vantage search result to Symbol object
+     * Convert Alpha Vantage quote to MarketData
      */
-    public Symbol convertToSymbol(Map<String, Object> result) {
-        Symbol symbol = new Symbol();
-        
-        if (result.containsKey("1. symbol")) {
-            symbol.setCode(result.get("1. symbol").toString());
-        }
-        if (result.containsKey("2. name")) {
-            symbol.setName(result.get("2. name").toString());
-        }
-        if (result.containsKey("4. region")) {
-            symbol.setExchange(result.get("4. region").toString());
-        }
-        if (result.containsKey("3. type")) {
-            symbol.setType(result.get("3. type").toString());
-        }
-        
-        return symbol;
-    }
-    
-    /**
-     * Convert Alpha Vantage quote to MarketData object
-     */
-    public MarketData convertToMarketData(Map<String, Object> quote, String symbolId) {
+    public MarketData convertToMarketData(String symbolId, Map<String, Object> quoteData) {
         MarketData marketData = new MarketData();
         
         marketData.setSymbolId(symbolId);
         marketData.setTimestamp(LocalDateTime.now());
+        
+        double open = (double) quoteData.get("open");
+        double high = (double) quoteData.get("high");
+        double low = (double) quoteData.get("low");
+        double close = (double) quoteData.get("price");
+        double volume = (double) quoteData.get("volume");
+        
+        marketData.setOpen(open);
+        marketData.setHigh(high);
+        marketData.setLow(low);
+        marketData.setClose(close);
+        marketData.setVolume(volume);
         marketData.setSource("Alpha Vantage");
-        
-        Map<String, Object> globalQuote = (Map<String, Object>) quote.get("Global Quote");
-        
-        if (globalQuote != null) {
-            if (globalQuote.containsKey("02. open")) {
-                marketData.setOpen(Double.parseDouble(globalQuote.get("02. open").toString()));
-            }
-            if (globalQuote.containsKey("03. high")) {
-                marketData.setHigh(Double.parseDouble(globalQuote.get("03. high").toString()));
-            }
-            if (globalQuote.containsKey("04. low")) {
-                marketData.setLow(Double.parseDouble(globalQuote.get("04. low").toString()));
-            }
-            if (globalQuote.containsKey("05. price")) {
-                marketData.setClose(Double.parseDouble(globalQuote.get("05. price").toString()));
-            }
-            if (globalQuote.containsKey("06. volume")) {
-                marketData.setVolume(Long.parseLong(globalQuote.get("06. volume").toString()));
-            }
-        }
         
         return marketData;
     }
     
     /**
-     * Convert Alpha Vantage intraday data to list of MarketData objects
+     * Convert Alpha Vantage intraday data to MarketData
      */
-    public List<MarketData> convertIntradayDataToMarketData(Map<String, Object> data, String symbolId) {
-        List<MarketData> marketDataList = new ArrayList<>();
+    public MarketData convertIntradayToMarketData(String symbolId, Map<String, Object> dataPoint) {
+        MarketData marketData = new MarketData();
         
-        if (data == null) {
-            return marketDataList;
-        }
+        marketData.setSymbolId(symbolId);
         
-        String intervalKey = "Time Series (5min)"; // Default to 5min
+        String timestampStr = (String) dataPoint.get("timestamp");
+        marketData.setTimestamp(LocalDateTime.parse(timestampStr, DATE_TIME_FORMATTER));
         
-        if (data.containsKey("Meta Data") && data.get("Meta Data") instanceof Map) {
-            Map<String, Object> metaData = (Map<String, Object>) data.get("Meta Data");
-            if (metaData.containsKey("4. Interval")) {
-                String interval = metaData.get("4. Interval").toString();
-                intervalKey = "Time Series (" + interval + ")";
-            }
-        }
+        double open = (double) dataPoint.get("open");
+        double high = (double) dataPoint.get("high");
+        double low = (double) dataPoint.get("low");
+        double close = (double) dataPoint.get("close");
+        double volume = (double) dataPoint.get("volume");
         
-        if (data.containsKey(intervalKey) && data.get(intervalKey) instanceof Map) {
-            Map<String, Object> timeSeries = (Map<String, Object>) data.get(intervalKey);
-            
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-            
-            for (Map.Entry<String, Object> entry : timeSeries.entrySet()) {
-                String timeStr = entry.getKey();
-                Map<String, Object> values = (Map<String, Object>) entry.getValue();
-                
-                MarketData marketData = new MarketData();
-                marketData.setSymbolId(symbolId);
-                marketData.setTimestamp(LocalDateTime.parse(timeStr, formatter));
-                marketData.setSource("Alpha Vantage");
-                
-                if (values.containsKey("1. open")) {
-                    marketData.setOpen(Double.parseDouble(values.get("1. open").toString()));
-                }
-                if (values.containsKey("2. high")) {
-                    marketData.setHigh(Double.parseDouble(values.get("2. high").toString()));
-                }
-                if (values.containsKey("3. low")) {
-                    marketData.setLow(Double.parseDouble(values.get("3. low").toString()));
-                }
-                if (values.containsKey("4. close")) {
-                    marketData.setClose(Double.parseDouble(values.get("4. close").toString()));
-                }
-                if (values.containsKey("5. volume")) {
-                    marketData.setVolume(Long.parseLong(values.get("5. volume").toString()));
-                }
-                
-                marketDataList.add(marketData);
-            }
-        }
+        marketData.setOpen(open);
+        marketData.setHigh(high);
+        marketData.setLow(low);
+        marketData.setClose(close);
+        marketData.setVolume(volume);
+        marketData.setSource("Alpha Vantage");
         
-        return marketDataList;
+        return marketData;
     }
     
     /**
-     * Convert Alpha Vantage daily data to list of MarketData objects
+     * Convert Alpha Vantage symbol data to Symbol
      */
-    public List<MarketData> convertDailyDataToMarketData(Map<String, Object> data, String symbolId) {
-        List<MarketData> marketDataList = new ArrayList<>();
+    public Symbol convertToSymbol(Map<String, Object> symbolData) {
+        String code = symbolData.get("1. symbol").toString();
+        String name = symbolData.get("2. name").toString();
+        String type = symbolData.get("3. type").toString();
+        String region = symbolData.get("4. region").toString();
+        String exchange = symbolData.get("5. marketOpen") != null ? symbolData.get("5. marketOpen").toString() : "NSE";
+        String description = name;
         
-        if (data == null) {
-            return marketDataList;
-        }
-        
-        if (data.containsKey("Time Series (Daily)") && data.get("Time Series (Daily)") instanceof Map) {
-            Map<String, Object> timeSeries = (Map<String, Object>) data.get("Time Series (Daily)");
-            
-            DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-            
-            for (Map.Entry<String, Object> entry : timeSeries.entrySet()) {
-                String dateStr = entry.getKey();
-                Map<String, Object> values = (Map<String, Object>) entry.getValue();
-                
-                MarketData marketData = new MarketData();
-                marketData.setSymbolId(symbolId);
-                marketData.setTimestamp(LocalDateTime.parse(dateStr + " 00:00:00", 
-                        DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
-                marketData.setSource("Alpha Vantage");
-                
-                if (values.containsKey("1. open")) {
-                    marketData.setOpen(Double.parseDouble(values.get("1. open").toString()));
-                }
-                if (values.containsKey("2. high")) {
-                    marketData.setHigh(Double.parseDouble(values.get("2. high").toString()));
-                }
-                if (values.containsKey("3. low")) {
-                    marketData.setLow(Double.parseDouble(values.get("3. low").toString()));
-                }
-                if (values.containsKey("4. close")) {
-                    marketData.setClose(Double.parseDouble(values.get("4. close").toString()));
-                }
-                if (values.containsKey("5. volume")) {
-                    marketData.setVolume(Long.parseLong(values.get("5. volume").toString()));
-                }
-                
-                marketDataList.add(marketData);
-            }
-        }
-        
-        return marketDataList;
+        return new Symbol(code, name, exchange, type, description, "", "");
     }
     
     /**
-     * Test connection to the API
+     * Test connection to the Alpha Vantage API
      */
     public Map<String, Object> testConnection() {
+        Map<String, Object> result = new HashMap<>();
         try {
-            // Try with a simple API call
-            Map<String, Object> result = searchSymbols("INFY");
-            return Map.of("success", true, "message", "Successfully connected to Alpha Vantage API", "responseSize", result.size());
+            boolean isWorking = isApiWorking();
+            result.put("success", isWorking);
+            result.put("message", isWorking ? "Successfully connected to Alpha Vantage API" : "Failed to connect to Alpha Vantage API");
         } catch (Exception e) {
-            return Map.of("success", false, "message", "Failed to connect to Alpha Vantage API: " + e.getMessage());
+            result.put("success", false);
+            result.put("message", "Error connecting to Alpha Vantage API: " + e.getMessage());
         }
+        return result;
     }
 }

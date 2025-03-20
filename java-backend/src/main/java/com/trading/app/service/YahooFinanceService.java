@@ -2,6 +2,9 @@ package com.trading.app.service;
 
 import com.trading.app.model.MarketData;
 import com.trading.app.model.Symbol;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -9,295 +12,422 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 @Service
 public class YahooFinanceService {
-
-    @Value("${yahoo.finance.api.key}")
+    
+    private static final Logger logger = LoggerFactory.getLogger(YahooFinanceService.class);
+    
+    @Value("${api.yahoo.key}")
     private String apiKey;
     
-    @Value("${yahoo.finance.api.baseUrl}")
+    @Value("${api.yahoo.base-url}")
     private String baseUrl;
     
-    private final RestTemplate restTemplate;
-    
-    public YahooFinanceService() {
-        this.restTemplate = new RestTemplate();
-    }
+    @Autowired
+    private RestTemplate restTemplate;
     
     /**
-     * Get market movers (top gainers, losers, etc.)
+     * Check if the Yahoo Finance API is working
      */
-    public List<Map<String, Object>> getMarketMovers(String type, String region) {
-        String url = baseUrl + "/market/v2/get-movers";
-        
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-API-KEY", apiKey);
-        
-        HttpEntity<String> entity = new HttpEntity<>(headers);
-        
-        ResponseEntity<Map> response = restTemplate.exchange(
-                url + "?region=" + region + "&lang=en",
-                HttpMethod.GET,
-                entity,
-                Map.class
-        );
-        
-        Map<String, Object> responseBody = response.getBody();
-        List<Map<String, Object>> result = new ArrayList<>();
-        
-        if (responseBody != null && responseBody.containsKey("finance")) {
-            Map<String, Object> finance = (Map<String, Object>) responseBody.get("finance");
-            if (finance.containsKey("result")) {
-                List<Map<String, Object>> results = (List<Map<String, Object>>) finance.get("result");
-                
-                for (Map<String, Object> movers : results) {
-                    if (movers.containsKey("id") && movers.get("id").toString().contains(type)) {
-                        if (movers.containsKey("quotes")) {
-                            result = (List<Map<String, Object>>) movers.get("quotes");
-                            break;
-                        }
-                    }
-                }
-            }
+    public boolean isApiWorking() {
+        try {
+            String url = baseUrl + "/market/v2/get-summary";
+            HttpHeaders headers = createHeaders();
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    url,
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+            
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            logger.error("Error checking Yahoo Finance API: {}", e.getMessage());
+            return false;
         }
-        
-        return result;
-    }
-    
-    /**
-     * Get quotes for multiple symbols
-     */
-    public List<Map<String, Object>> getQuotes(List<String> symbols) {
-        String symbolList = String.join(",", symbols);
-        String url = baseUrl + "/market/v2/get-quotes?region=IN&symbols=" + symbolList;
-        
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-API-KEY", apiKey);
-        
-        HttpEntity<String> entity = new HttpEntity<>(headers);
-        
-        ResponseEntity<Map> response = restTemplate.exchange(
-                url,
-                HttpMethod.GET,
-                entity,
-                Map.class
-        );
-        
-        Map<String, Object> responseBody = response.getBody();
-        List<Map<String, Object>> result = new ArrayList<>();
-        
-        if (responseBody != null && responseBody.containsKey("quoteResponse")) {
-            Map<String, Object> quoteResponse = (Map<String, Object>) responseBody.get("quoteResponse");
-            if (quoteResponse.containsKey("result")) {
-                result = (List<Map<String, Object>>) quoteResponse.get("result");
-            }
-        }
-        
-        return result;
-    }
-    
-    /**
-     * Get quotes for a single symbol
-     */
-    public Map<String, Object> getQuote(String symbol) {
-        List<String> symbols = new ArrayList<>();
-        symbols.add(symbol);
-        
-        List<Map<String, Object>> quotes = getQuotes(symbols);
-        
-        if (!quotes.isEmpty()) {
-            return quotes.get(0);
-        }
-        
-        return null;
-    }
-    
-    /**
-     * Get historical data for a symbol
-     */
-    public List<Map<String, Object>> getHistoricalData(String symbol, String interval, String range) {
-        String url = baseUrl + "/market/get-charts?region=IN&lang=en&symbol=" + symbol + "&interval=" + interval + "&range=" + range;
-        
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-API-KEY", apiKey);
-        
-        HttpEntity<String> entity = new HttpEntity<>(headers);
-        
-        ResponseEntity<Map> response = restTemplate.exchange(
-                url,
-                HttpMethod.GET,
-                entity,
-                Map.class
-        );
-        
-        Map<String, Object> responseBody = response.getBody();
-        List<Map<String, Object>> result = new ArrayList<>();
-        
-        if (responseBody != null && responseBody.containsKey("chart")) {
-            Map<String, Object> chart = (Map<String, Object>) responseBody.get("chart");
-            if (chart.containsKey("result")) {
-                List<Map<String, Object>> results = (List<Map<String, Object>>) chart.get("result");
-                
-                if (!results.isEmpty()) {
-                    Map<String, Object> data = results.get(0);
-                    
-                    List<Long> timestamps = (List<Long>) data.get("timestamp");
-                    List<Map<String, Object>> indicators = (List<Map<String, Object>>) ((Map<String, Object>) data.get("indicators")).get("quote");
-                    Map<String, Object> quote = indicators.get(0);
-                    
-                    List<Double> opens = (List<Double>) quote.get("open");
-                    List<Double> highs = (List<Double>) quote.get("high");
-                    List<Double> lows = (List<Double>) quote.get("low");
-                    List<Double> closes = (List<Double>) quote.get("close");
-                    List<Long> volumes = (List<Long>) quote.get("volume");
-                    
-                    for (int i = 0; i < timestamps.size(); i++) {
-                        if (opens.get(i) != null && highs.get(i) != null && lows.get(i) != null && closes.get(i) != null) {
-                            Map<String, Object> point = Map.of(
-                                    "timestamp", timestamps.get(i),
-                                    "open", opens.get(i),
-                                    "high", highs.get(i),
-                                    "low", lows.get(i),
-                                    "close", closes.get(i),
-                                    "volume", volumes.get(i) != null ? volumes.get(i) : 0
-                            );
-                            result.add(point);
-                        }
-                    }
-                }
-            }
-        }
-        
-        return result;
     }
     
     /**
      * Search for symbols
      */
-    public List<Map<String, Object>> searchSymbols(String query) {
-        String url = baseUrl + "/market/v2/auto-complete?region=IN&lang=en&query=" + query;
-        
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-API-KEY", apiKey);
-        
-        HttpEntity<String> entity = new HttpEntity<>(headers);
-        
-        ResponseEntity<Map> response = restTemplate.exchange(
-                url,
-                HttpMethod.GET,
-                entity,
-                Map.class
-        );
-        
-        Map<String, Object> responseBody = response.getBody();
-        List<Map<String, Object>> result = new ArrayList<>();
-        
-        if (responseBody != null && responseBody.containsKey("quotes")) {
-            result = (List<Map<String, Object>>) responseBody.get("quotes");
+    public List<Map<String, Object>> searchSymbols(String query) throws Exception {
+        try {
+            String url = baseUrl + "/market/v2/auto-complete";
+            
+            HttpHeaders headers = createHeaders();
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("q", query)
+                    .queryParam("region", "IN");
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    builder.toUriString(),
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to search symbols: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            List<Map<String, Object>> quotes = (List<Map<String, Object>>) data.get("quotes");
+            
+            // Filter to get only Indian stocks (symbols ending with .NS or .BO)
+            List<Map<String, Object>> filteredQuotes = new ArrayList<>();
+            
+            for (Map<String, Object> quote : quotes) {
+                String symbol = quote.get("symbol").toString();
+                if (symbol.endsWith(".NS") || symbol.endsWith(".BO") || symbol.startsWith("^")) {
+                    filteredQuotes.add(quote);
+                }
+            }
+            
+            return filteredQuotes;
+        } catch (Exception e) {
+            logger.error("Error searching symbols in Yahoo Finance: {}", e.getMessage());
+            throw e;
         }
-        
-        return result;
     }
     
     /**
-     * Convert a Yahoo Finance quote to a Symbol object
+     * Get historical data for a symbol
      */
-    public Symbol convertToSymbol(Map<String, Object> quote) {
-        Symbol symbol = new Symbol();
-        
-        if (quote.containsKey("symbol")) {
-            symbol.setCode(quote.get("symbol").toString());
+    public List<Map<String, Object>> getHistoricalData(String symbol, String interval, String range) throws Exception {
+        try {
+            String url = baseUrl + "/market/v2/get-chart";
+            
+            HttpHeaders headers = createHeaders();
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("symbol", symbol)
+                    .queryParam("interval", interval)
+                    .queryParam("range", range)
+                    .queryParam("region", "IN");
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    builder.toUriString(),
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get historical data: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            Map<String, Object> chart = (Map<String, Object>) data.get("chart");
+            List<Map<String, Object>> result = (List<Map<String, Object>>) chart.get("result");
+            
+            if (result == null || result.isEmpty()) {
+                throw new Exception("No data found for symbol: " + symbol);
+            }
+            
+            Map<String, Object> resultData = result.get(0);
+            Map<String, Object> indicators = (Map<String, Object>) resultData.get("indicators");
+            List<Map<String, Object>> quotes = (List<Map<String, Object>>) indicators.get("quote");
+            List<Long> timestamps = (List<Long>) resultData.get("timestamp");
+            
+            if (quotes == null || quotes.isEmpty() || timestamps == null || timestamps.isEmpty()) {
+                throw new Exception("No quote data found for symbol: " + symbol);
+            }
+            
+            Map<String, Object> quote = quotes.get(0);
+            
+            List<Map<String, Object>> historicalData = new ArrayList<>();
+            
+            List<Double> opens = (List<Double>) quote.get("open");
+            List<Double> highs = (List<Double>) quote.get("high");
+            List<Double> lows = (List<Double>) quote.get("low");
+            List<Double> closes = (List<Double>) quote.get("close");
+            List<Long> volumes = (List<Long>) quote.get("volume");
+            
+            for (int i = 0; i < timestamps.size(); i++) {
+                if (i < opens.size() && i < highs.size() && i < lows.size() && i < closes.size() && i < volumes.size()) {
+                    // Skip data points with null values
+                    if (opens.get(i) == null || highs.get(i) == null || lows.get(i) == null || closes.get(i) == null || volumes.get(i) == null) {
+                        continue;
+                    }
+                    
+                    Map<String, Object> dataPoint = new HashMap<>();
+                    dataPoint.put("timestamp", timestamps.get(i));
+                    dataPoint.put("open", opens.get(i));
+                    dataPoint.put("high", highs.get(i));
+                    dataPoint.put("low", lows.get(i));
+                    dataPoint.put("close", closes.get(i));
+                    dataPoint.put("volume", volumes.get(i));
+                    
+                    historicalData.add(dataPoint);
+                }
+            }
+            
+            return historicalData;
+        } catch (Exception e) {
+            logger.error("Error getting historical data from Yahoo Finance: {}", e.getMessage());
+            throw e;
         }
-        if (quote.containsKey("shortName")) {
-            symbol.setName(quote.get("shortName").toString());
-        }
-        if (quote.containsKey("exchange")) {
-            symbol.setExchange(quote.get("exchange").toString());
-        }
-        if (quote.containsKey("typeDisp")) {
-            symbol.setType(quote.get("typeDisp").toString());
-        }
-        if (quote.containsKey("longName")) {
-            symbol.setDescription(quote.get("longName").toString());
-        }
-        if (quote.containsKey("sector")) {
-            symbol.setSector(quote.get("sector").toString());
-        }
-        if (quote.containsKey("industry")) {
-            symbol.setIndustry(quote.get("industry").toString());
-        }
-        
-        return symbol;
     }
     
     /**
-     * Convert a Yahoo Finance quote to a MarketData object
+     * Get the latest market data for a symbol
      */
-    public MarketData convertToMarketData(Map<String, Object> quote, String symbolId) {
+    public Map<String, Object> getQuote(String symbol) throws Exception {
+        try {
+            String url = baseUrl + "/market/v2/get-quotes";
+            
+            HttpHeaders headers = createHeaders();
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("symbols", symbol)
+                    .queryParam("region", "IN");
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    builder.toUriString(),
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get quote: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            Map<String, Object> quoteResponse = (Map<String, Object>) data.get("quoteResponse");
+            List<Map<String, Object>> result = (List<Map<String, Object>>) quoteResponse.get("result");
+            
+            if (result == null || result.isEmpty()) {
+                throw new Exception("No quote data found for symbol: " + symbol);
+            }
+            
+            return result.get(0);
+        } catch (Exception e) {
+            logger.error("Error getting quote from Yahoo Finance: {}", e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Get the top gainers in the market
+     */
+    public List<Map<String, Object>> getTopGainers() throws Exception {
+        try {
+            String url = baseUrl + "/market/v2/get-movers";
+            
+            HttpHeaders headers = createHeaders();
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("region", "IN")
+                    .queryParam("lang", "en-IN")
+                    .queryParam("count", 5)
+                    .queryParam("start", 0);
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    builder.toUriString(),
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get top gainers: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            Map<String, Object> finance = (Map<String, Object>) data.get("finance");
+            List<Map<String, Object>> result = (List<Map<String, Object>>) finance.get("result");
+            
+            if (result == null || result.isEmpty()) {
+                throw new Exception("No top gainers found");
+            }
+            
+            List<Map<String, Object>> quotes = new ArrayList<>();
+            
+            for (Map<String, Object> mover : result) {
+                String id = mover.get("id").toString();
+                if (id.equals("nse_gainers")) {
+                    quotes = (List<Map<String, Object>>) mover.get("quotes");
+                    break;
+                }
+            }
+            
+            return quotes;
+        } catch (Exception e) {
+            logger.error("Error getting top gainers from Yahoo Finance: {}", e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Get the top losers in the market
+     */
+    public List<Map<String, Object>> getTopLosers() throws Exception {
+        try {
+            String url = baseUrl + "/market/v2/get-movers";
+            
+            HttpHeaders headers = createHeaders();
+            
+            UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(url)
+                    .queryParam("region", "IN")
+                    .queryParam("lang", "en-IN")
+                    .queryParam("count", 5)
+                    .queryParam("start", 0);
+            
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            ResponseEntity<Map> response = restTemplate.exchange(
+                    builder.toUriString(),
+                    HttpMethod.GET,
+                    entity,
+                    Map.class
+            );
+            
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                throw new Exception("Failed to get top losers: " + response.getStatusCode());
+            }
+            
+            Map<String, Object> data = response.getBody();
+            Map<String, Object> finance = (Map<String, Object>) data.get("finance");
+            List<Map<String, Object>> result = (List<Map<String, Object>>) finance.get("result");
+            
+            if (result == null || result.isEmpty()) {
+                throw new Exception("No top losers found");
+            }
+            
+            List<Map<String, Object>> quotes = new ArrayList<>();
+            
+            for (Map<String, Object> mover : result) {
+                String id = mover.get("id").toString();
+                if (id.equals("nse_losers")) {
+                    quotes = (List<Map<String, Object>>) mover.get("quotes");
+                    break;
+                }
+            }
+            
+            return quotes;
+        } catch (Exception e) {
+            logger.error("Error getting top losers from Yahoo Finance: {}", e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Convert Yahoo Finance quote to MarketData
+     */
+    public MarketData convertToMarketData(String symbolId, Map<String, Object> quoteData) {
         MarketData marketData = new MarketData();
         
         marketData.setSymbolId(symbolId);
         marketData.setTimestamp(LocalDateTime.now());
-        marketData.setSource("Yahoo Finance");
         
-        if (quote.containsKey("regularMarketOpen")) {
-            marketData.setOpen(Double.parseDouble(quote.get("regularMarketOpen").toString()));
-        }
-        if (quote.containsKey("regularMarketDayHigh")) {
-            marketData.setHigh(Double.parseDouble(quote.get("regularMarketDayHigh").toString()));
-        }
-        if (quote.containsKey("regularMarketDayLow")) {
-            marketData.setLow(Double.parseDouble(quote.get("regularMarketDayLow").toString()));
-        }
-        if (quote.containsKey("regularMarketPrice")) {
-            marketData.setClose(Double.parseDouble(quote.get("regularMarketPrice").toString()));
-        }
-        if (quote.containsKey("regularMarketVolume")) {
-            marketData.setVolume(Long.parseLong(quote.get("regularMarketVolume").toString()));
-        }
+        double open = Double.parseDouble(quoteData.get("regularMarketOpen").toString());
+        double high = Double.parseDouble(quoteData.get("regularMarketDayHigh").toString());
+        double low = Double.parseDouble(quoteData.get("regularMarketDayLow").toString());
+        double close = Double.parseDouble(quoteData.get("regularMarketPrice").toString());
+        double volume = Double.parseDouble(quoteData.get("regularMarketVolume").toString());
+        
+        marketData.setOpen(open);
+        marketData.setHigh(high);
+        marketData.setLow(low);
+        marketData.setClose(close);
+        marketData.setVolume(volume);
+        marketData.setSource("Yahoo Finance");
         
         return marketData;
     }
     
     /**
-     * Convert historical data point to a MarketData object
+     * Convert Yahoo Finance historical data to MarketData
      */
-    public MarketData convertHistoricalDataToMarketData(Map<String, Object> dataPoint, String symbolId) {
+    public MarketData convertHistoricalToMarketData(String symbolId, Map<String, Object> histData) {
         MarketData marketData = new MarketData();
         
         marketData.setSymbolId(symbolId);
         
-        // Convert timestamp (seconds) to LocalDateTime
-        long timestamp = (Long) dataPoint.get("timestamp");
-        marketData.setTimestamp(LocalDateTime.now()); // This should be converted properly
+        // Convert timestamp from Unix seconds to LocalDateTime
+        long timestamp = (long) histData.get("timestamp");
+        marketData.setTimestamp(LocalDateTime.ofEpochSecond(timestamp, 0, ZoneOffset.UTC));
         
-        marketData.setOpen((Double) dataPoint.get("open"));
-        marketData.setHigh((Double) dataPoint.get("high"));
-        marketData.setLow((Double) dataPoint.get("low"));
-        marketData.setClose((Double) dataPoint.get("close"));
-        marketData.setVolume((Long) dataPoint.get("volume"));
+        double open = (double) histData.get("open");
+        double high = (double) histData.get("high");
+        double low = (double) histData.get("low");
+        double close = (double) histData.get("close");
+        long volume = (long) histData.get("volume");
         
+        marketData.setOpen(open);
+        marketData.setHigh(high);
+        marketData.setLow(low);
+        marketData.setClose(close);
+        marketData.setVolume(volume);
         marketData.setSource("Yahoo Finance");
         
         return marketData;
     }
     
     /**
-     * Test connection to the API
+     * Convert Yahoo Finance symbol data to Symbol
+     */
+    public Symbol convertToSymbol(Map<String, Object> symbolData) {
+        String code = symbolData.get("symbol").toString();
+        String name = symbolData.get("shortname") != null ? symbolData.get("shortname").toString() : 
+                     (symbolData.get("longname") != null ? symbolData.get("longname").toString() : code);
+        
+        String exchange = symbolData.get("exchange") != null ? symbolData.get("exchange").toString() : "";
+        String type = symbolData.get("quoteType") != null ? symbolData.get("quoteType").toString() : "Equity";
+        
+        String description = symbolData.get("longname") != null ? symbolData.get("longname").toString() : 
+                           (symbolData.get("shortname") != null ? symbolData.get("shortname").toString() : "");
+        
+        String sector = symbolData.get("sector") != null ? symbolData.get("sector").toString() : "";
+        String industry = symbolData.get("industry") != null ? symbolData.get("industry").toString() : "";
+        
+        return new Symbol(code, name, exchange, type, description, sector, industry);
+    }
+    
+    /**
+     * Create the headers for API requests
+     */
+    private HttpHeaders createHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-API-KEY", apiKey);
+        return headers;
+    }
+    
+    /**
+     * Test connection to the Yahoo Finance API
      */
     public Map<String, Object> testConnection() {
+        Map<String, Object> result = new HashMap<>();
         try {
-            List<String> testSymbols = List.of("RELIANCE.NS", "INFY.NS");
-            List<Map<String, Object>> quotes = getQuotes(testSymbols);
-            return Map.of("success", true, "message", "Successfully connected to Yahoo Finance API", "responseSize", quotes.size());
+            boolean isWorking = isApiWorking();
+            result.put("success", isWorking);
+            result.put("message", isWorking ? "Successfully connected to Yahoo Finance API" : "Failed to connect to Yahoo Finance API");
         } catch (Exception e) {
-            return Map.of("success", false, "message", "Failed to connect to Yahoo Finance API: " + e.getMessage());
+            result.put("success", false);
+            result.put("message", "Error connecting to Yahoo Finance API: " + e.getMessage());
         }
+        return result;
     }
 }

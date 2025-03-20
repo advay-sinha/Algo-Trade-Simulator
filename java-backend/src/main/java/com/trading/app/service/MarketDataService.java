@@ -9,17 +9,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 public class MarketDataService {
-
+    
     private static final Logger logger = LoggerFactory.getLogger(MarketDataService.class);
     
     @Autowired
@@ -42,7 +45,7 @@ public class MarketDataService {
     }
     
     /**
-     * Get historical market data for a symbol with limit
+     * Get historical market data for a symbol
      */
     public List<MarketData> getHistoricalMarketData(String symbolId, int limit) {
         return marketDataRepository.findBySymbolIdOrderByTimestampDesc(
@@ -50,69 +53,37 @@ public class MarketDataService {
     }
     
     /**
-     * Get market data for a specific time range
-     */
-    public List<MarketData> getMarketDataForTimeRange(String symbolId, LocalDateTime startTime, LocalDateTime endTime) {
-        return marketDataRepository.findBySymbolIdAndTimestampBetweenOrderByTimestampAsc(
-                symbolId, startTime, endTime);
-    }
-    
-    /**
-     * Fetch and save the latest market data for a symbol using Yahoo Finance
+     * Fetch and save the latest market data for a symbol
      */
     public MarketData fetchAndSaveLatestMarketData(String symbolCode) throws Exception {
         // First try with Yahoo Finance
         try {
-            Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
-            Symbol symbol;
-            
-            if (symbolOpt.isEmpty()) {
-                // If symbol doesn't exist, create it
-                Map<String, Object> quote = yahooFinanceService.getQuote(symbolCode);
-                if (quote == null) {
-                    throw new Exception("Symbol not found: " + symbolCode);
-                }
-                
-                symbol = yahooFinanceService.convertToSymbol(quote);
-                symbol = symbolRepository.save(symbol);
-            } else {
-                symbol = symbolOpt.get();
-            }
-            
             Map<String, Object> quote = yahooFinanceService.getQuote(symbolCode);
-            if (quote == null) {
-                throw new Exception("Failed to fetch data from Yahoo Finance for: " + symbolCode);
+            
+            Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
+            if (symbolOpt.isEmpty()) {
+                throw new Exception("Symbol not found: " + symbolCode);
             }
             
-            MarketData marketData = yahooFinanceService.convertToMarketData(quote, symbol.getId());
+            Symbol symbol = symbolOpt.get();
+            MarketData marketData = yahooFinanceService.convertToMarketData(symbol.getId(), quote);
+            
             return marketDataRepository.save(marketData);
         } catch (Exception e) {
             logger.error("Error fetching data from Yahoo Finance: {}", e.getMessage());
             
             // Fallback to Alpha Vantage
             try {
-                Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
-                Symbol symbol;
-                
-                if (symbolOpt.isEmpty()) {
-                    // If symbol doesn't exist, create it
-                    List<Map<String, Object>> searchResults = alphaVantageService.searchSymbols(symbolCode);
-                    if (searchResults.isEmpty()) {
-                        throw new Exception("Symbol not found: " + symbolCode);
-                    }
-                    
-                    symbol = alphaVantageService.convertToSymbol(searchResults.get(0));
-                    symbol = symbolRepository.save(symbol);
-                } else {
-                    symbol = symbolOpt.get();
-                }
-                
                 Map<String, Object> quote = alphaVantageService.getQuote(symbolCode);
-                if (quote == null) {
-                    throw new Exception("Failed to fetch data from Alpha Vantage for: " + symbolCode);
+                
+                Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
+                if (symbolOpt.isEmpty()) {
+                    throw new Exception("Symbol not found: " + symbolCode);
                 }
                 
-                MarketData marketData = alphaVantageService.convertToMarketData(quote, symbol.getId());
+                Symbol symbol = symbolOpt.get();
+                MarketData marketData = alphaVantageService.convertToMarketData(symbol.getId(), quote);
+                
                 return marketDataRepository.save(marketData);
             } catch (Exception avError) {
                 logger.error("Error fetching data from Alpha Vantage: {}", avError.getMessage());
@@ -122,37 +93,23 @@ public class MarketDataService {
     }
     
     /**
-     * Fetch and save historical market data for a symbol using Yahoo Finance
+     * Fetch and save historical market data for a symbol
      */
     public List<MarketData> fetchAndSaveHistoricalMarketData(String symbolCode, String interval, String range) throws Exception {
+        Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
+        if (symbolOpt.isEmpty()) {
+            throw new Exception("Symbol not found: " + symbolCode);
+        }
+        
+        Symbol symbol = symbolOpt.get();
         List<MarketData> savedData = new ArrayList<>();
         
         // First try with Yahoo Finance
         try {
-            Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
-            Symbol symbol;
-            
-            if (symbolOpt.isEmpty()) {
-                // If symbol doesn't exist, create it
-                Map<String, Object> quote = yahooFinanceService.getQuote(symbolCode);
-                if (quote == null) {
-                    throw new Exception("Symbol not found: " + symbolCode);
-                }
-                
-                symbol = yahooFinanceService.convertToSymbol(quote);
-                symbol = symbolRepository.save(symbol);
-            } else {
-                symbol = symbolOpt.get();
-            }
-            
             List<Map<String, Object>> historicalData = yahooFinanceService.getHistoricalData(symbolCode, interval, range);
             
-            if (historicalData.isEmpty()) {
-                throw new Exception("No historical data found from Yahoo Finance for: " + symbolCode);
-            }
-            
             for (Map<String, Object> dataPoint : historicalData) {
-                MarketData marketData = yahooFinanceService.convertHistoricalDataToMarketData(dataPoint, symbol.getId());
+                MarketData marketData = yahooFinanceService.convertHistoricalToMarketData(symbol.getId(), dataPoint);
                 savedData.add(marketDataRepository.save(marketData));
             }
             
@@ -162,103 +119,141 @@ public class MarketDataService {
             
             // Fallback to Alpha Vantage
             try {
-                Optional<Symbol> symbolOpt = symbolRepository.findByCode(symbolCode);
-                Symbol symbol;
+                List<Map<String, Object>> intradayData = alphaVantageService.getIntradayData(symbolCode, interval);
                 
-                if (symbolOpt.isEmpty()) {
-                    // If symbol doesn't exist, create it
-                    List<Map<String, Object>> searchResults = alphaVantageService.searchSymbols(symbolCode);
-                    if (searchResults.isEmpty()) {
-                        throw new Exception("Symbol not found: " + symbolCode);
-                    }
-                    
-                    symbol = alphaVantageService.convertToSymbol(searchResults.get(0));
-                    symbol = symbolRepository.save(symbol);
-                } else {
-                    symbol = symbolOpt.get();
-                }
-                
-                // Map the interval to Alpha Vantage format
-                String avInterval = "5min"; // Default
-                if (interval.equals("1d")) {
-                    // Use daily data
-                    Map<String, Object> dailyData = alphaVantageService.getDailyData(symbolCode);
-                    List<MarketData> marketDataList = alphaVantageService.convertDailyDataToMarketData(dailyData, symbol.getId());
-                    
-                    for (MarketData data : marketDataList) {
-                        savedData.add(marketDataRepository.save(data));
-                    }
-                } else {
-                    // Use intraday data with appropriate interval
-                    if (interval.equals("1h")) {
-                        avInterval = "60min";
-                    } else if (interval.equals("30m")) {
-                        avInterval = "30min";
-                    } else if (interval.equals("15m")) {
-                        avInterval = "15min";
-                    }
-                    
-                    Map<String, Object> intradayData = alphaVantageService.getIntradayData(symbolCode, avInterval);
-                    List<MarketData> marketDataList = alphaVantageService.convertIntradayDataToMarketData(intradayData, symbol.getId());
-                    
-                    for (MarketData data : marketDataList) {
-                        savedData.add(marketDataRepository.save(data));
-                    }
+                for (Map<String, Object> dataPoint : intradayData) {
+                    MarketData marketData = alphaVantageService.convertIntradayToMarketData(symbol.getId(), dataPoint);
+                    savedData.add(marketDataRepository.save(marketData));
                 }
                 
                 return savedData;
             } catch (Exception avError) {
                 logger.error("Error fetching historical data from Alpha Vantage: {}", avError.getMessage());
-                throw new Exception("Failed to fetch historical market data from both Yahoo Finance and Alpha Vantage");
+                throw new Exception("Failed to fetch historical data from both Yahoo Finance and Alpha Vantage");
             }
         }
     }
     
     /**
-     * Save market data
+     * Get the top gainers in the market
      */
-    public MarketData saveMarketData(MarketData marketData) {
-        return marketDataRepository.save(marketData);
+    public List<Map<String, Object>> getTopGainers() throws Exception {
+        // First try with Yahoo Finance
+        try {
+            List<Map<String, Object>> topGainers = yahooFinanceService.getTopGainers();
+            return topGainers;
+        } catch (Exception e) {
+            logger.error("Error fetching top gainers from Yahoo Finance: {}", e.getMessage());
+            
+            // For Alpha Vantage, this is not directly available
+            // We would need to implement a custom solution by fetching multiple symbols
+            // For now, we'll just return an empty list
+            return new ArrayList<>();
+        }
     }
     
     /**
-     * Save multiple market data entries
+     * Get the top losers in the market
      */
-    public List<MarketData> saveAllMarketData(List<MarketData> marketDataList) {
-        return marketDataRepository.saveAll(marketDataList);
+    public List<Map<String, Object>> getTopLosers() throws Exception {
+        // First try with Yahoo Finance
+        try {
+            List<Map<String, Object>> topLosers = yahooFinanceService.getTopLosers();
+            return topLosers;
+        } catch (Exception e) {
+            logger.error("Error fetching top losers from Yahoo Finance: {}", e.getMessage());
+            
+            // For Alpha Vantage, this is not directly available
+            // We would need to implement a custom solution by fetching multiple symbols
+            // For now, we'll just return an empty list
+            return new ArrayList<>();
+        }
     }
     
     /**
-     * Delete market data
+     * Get market indices (NSE, BSE, etc.)
      */
-    public void deleteMarketData(String id) {
-        marketDataRepository.deleteById(id);
-    }
-    
-    /**
-     * Delete all market data for a symbol
-     */
-    public void deleteAllMarketDataForSymbol(String symbolId) {
-        marketDataRepository.deleteBySymbolId(symbolId);
-    }
-    
-    /**
-     * Delete old market data (older than a certain date)
-     */
-    public void deleteOldMarketData(LocalDateTime olderThan) {
-        marketDataRepository.deleteByTimestampBefore(olderThan);
-    }
-    
-    /**
-     * Test connections to market data APIs
-     */
-    public Map<String, Object> testConnections() {
-        Map<String, Object> yahooResult = yahooFinanceService.testConnection();
-        Map<String, Object> alphaVantageResult = alphaVantageService.testConnection();
+    public List<Map<String, Object>> getMarketIndices() throws Exception {
+        List<Symbol> indices = symbolRepository.findByType("Index");
         
-        return Map.of(
-                "yahooFinance", yahooResult,
-                "alphaVantage", alphaVantageResult
-        );
+        List<Map<String, Object>> marketIndices = new ArrayList<>();
+        
+        for (Symbol index : indices) {
+            try {
+                Map<String, Object> indexData = new HashMap<>();
+                indexData.put("symbol", index.getCode());
+                indexData.put("name", index.getName());
+                
+                // First try with Yahoo Finance
+                try {
+                    Map<String, Object> quote = yahooFinanceService.getQuote(index.getCode());
+                    indexData.put("price", quote.get("regularMarketPrice"));
+                    indexData.put("change", quote.get("regularMarketChange"));
+                    indexData.put("changePercent", quote.get("regularMarketChangePercent"));
+                } catch (Exception e) {
+                    // Fallback to Alpha Vantage
+                    try {
+                        Map<String, Object> quote = alphaVantageService.getQuote(index.getCode());
+                        indexData.put("price", quote.get("price"));
+                        indexData.put("change", quote.get("change"));
+                        indexData.put("changePercent", quote.get("changePercent"));
+                    } catch (Exception avError) {
+                        // Skip if both APIs fail
+                        continue;
+                    }
+                }
+                
+                marketIndices.add(indexData);
+            } catch (Exception e) {
+                logger.error("Error fetching data for index {}: {}", index.getCode(), e.getMessage());
+            }
+        }
+        
+        return marketIndices;
+    }
+    
+    /**
+     * Update market data for all tracked symbols (called by scheduler)
+     */
+    @Scheduled(cron = "${scheduler.market-data-update.cron}")
+    public void updateMarketData() {
+        logger.info("Updating market data for all tracked symbols...");
+        
+        List<Symbol> symbols = symbolRepository.findAll();
+        
+        for (Symbol symbol : symbols) {
+            try {
+                fetchAndSaveLatestMarketData(symbol.getCode());
+                logger.info("Updated market data for symbol: {}", symbol.getCode());
+            } catch (Exception e) {
+                logger.error("Error updating market data for symbol {}: {}", symbol.getCode(), e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * Test API connectivity
+     */
+    public Map<String, Object> testApiConnectivity() {
+        Map<String, Object> result = new HashMap<>();
+        
+        // Test Yahoo Finance connectivity
+        Map<String, Object> yahooResult = yahooFinanceService.testConnection();
+        result.put("yahooFinance", yahooResult);
+        
+        // Test Alpha Vantage connectivity
+        Map<String, Object> alphaVantageResult = alphaVantageService.testConnection();
+        result.put("alphaVantage", alphaVantageResult);
+        
+        boolean overallSuccess = 
+                (boolean) yahooResult.get("success") || 
+                (boolean) alphaVantageResult.get("success");
+        
+        result.put("success", overallSuccess);
+        result.put("message", overallSuccess ? 
+                "At least one API is working correctly" : 
+                "Both APIs are unavailable");
+        
+        return result;
     }
 }

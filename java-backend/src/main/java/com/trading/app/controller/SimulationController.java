@@ -1,12 +1,23 @@
 package com.trading.app.controller;
 
 import com.trading.app.model.Simulation;
+import com.trading.app.model.Strategy;
 import com.trading.app.model.Trade;
 import com.trading.app.service.SimulationService;
+import com.trading.app.service.StrategyService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.HashMap;
 import java.util.List;
@@ -14,141 +25,237 @@ import java.util.Map;
 import java.util.Optional;
 
 @RestController
-@RequestMapping("/simulations")
+@RequestMapping("/simulation")
 public class SimulationController {
-
+    
+    private static final Logger logger = LoggerFactory.getLogger(SimulationController.class);
+    
     @Autowired
     private SimulationService simulationService;
+    
+    @Autowired
+    private StrategyService strategyService;
+    
+    /**
+     * Get all strategies
+     */
+    @GetMapping("/strategies")
+    public ResponseEntity<List<Strategy>> getAllStrategies() {
+        List<Strategy> strategies = strategyService.getAllStrategies();
+        return ResponseEntity.ok(strategies);
+    }
+    
+    /**
+     * Get a strategy by ID
+     */
+    @GetMapping("/strategies/{id}")
+    public ResponseEntity<Strategy> getStrategyById(@PathVariable String id) {
+        Optional<Strategy> strategy = strategyService.getStrategyById(id);
+        return strategy.map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+    
+    /**
+     * Initialize default strategies
+     */
+    @GetMapping("/init-default-strategies")
+    public ResponseEntity<String> initializeDefaultStrategies() {
+        try {
+            strategyService.initializeDefaultStrategies();
+            return ResponseEntity.ok("Default strategies initialized successfully");
+        } catch (Exception e) {
+            logger.error("Error initializing default strategies: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error initializing default strategies: " + e.getMessage());
+        }
+    }
     
     /**
      * Get all simulations for a user
      */
-    @GetMapping("/user/{userId}")
+    @GetMapping("/simulations/{userId}")
     public ResponseEntity<List<Simulation>> getSimulationsForUser(@PathVariable String userId) {
-        return ResponseEntity.ok(simulationService.getSimulationsForUser(userId));
+        List<Simulation> simulations = simulationService.getSimulationsForUser(userId);
+        return ResponseEntity.ok(simulations);
     }
     
     /**
      * Get active simulations for a user
      */
-    @GetMapping("/user/{userId}/active")
+    @GetMapping("/simulations/active/{userId}")
     public ResponseEntity<List<Simulation>> getActiveSimulationsForUser(@PathVariable String userId) {
-        return ResponseEntity.ok(simulationService.getActiveSimulationsForUser(userId));
+        List<Simulation> simulations = simulationService.getActiveSimulationsForUser(userId);
+        return ResponseEntity.ok(simulations);
     }
     
     /**
      * Get a simulation by ID
      */
-    @GetMapping("/{id}")
-    public ResponseEntity<?> getSimulationById(@PathVariable String id) {
-        Optional<Simulation> simulationOpt = simulationService.getSimulationById(id);
-        return simulationOpt.map(ResponseEntity::ok)
+    @GetMapping("/simulations/detail/{id}")
+    public ResponseEntity<Simulation> getSimulationById(@PathVariable String id) {
+        Optional<Simulation> simulation = simulationService.getSimulationById(id);
+        return simulation.map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
     
     /**
      * Create a new simulation
      */
-    @PostMapping("")
-    public ResponseEntity<Simulation> createSimulation(@RequestBody Simulation simulation) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(simulationService.createSimulation(simulation));
+    @PostMapping("/simulations")
+    public ResponseEntity<?> createSimulation(@RequestBody Simulation simulation) {
+        try {
+            Simulation createdSimulation = simulationService.createSimulation(simulation);
+            return ResponseEntity.status(HttpStatus.CREATED).body(createdSimulation);
+        } catch (Exception e) {
+            logger.error("Error creating simulation: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
     }
     
     /**
      * Update a simulation
      */
-    @PutMapping("/{id}")
+    @PutMapping("/simulations/{id}")
     public ResponseEntity<?> updateSimulation(
             @PathVariable String id,
             @RequestBody Simulation simulationUpdates) {
-        Optional<Simulation> updatedSimulation = simulationService.updateSimulation(id, simulationUpdates);
-        return updatedSimulation.map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        
+        try {
+            Optional<Simulation> updatedSimulation = simulationService.updateSimulation(id, simulationUpdates);
+            
+            return updatedSimulation.map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            logger.error("Error updating simulation: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
     }
     
     /**
      * Pause a simulation
      */
-    @PostMapping("/{id}/pause")
+    @PutMapping("/simulations/{id}/pause")
     public ResponseEntity<?> pauseSimulation(@PathVariable String id) {
-        Optional<Simulation> pausedSimulation = simulationService.pauseSimulation(id);
-        return pausedSimulation.map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        try {
+            Optional<Simulation> pausedSimulation = simulationService.pauseSimulation(id);
+            
+            return pausedSimulation.map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            logger.error("Error pausing simulation: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
     }
     
     /**
      * Resume a simulation
      */
-    @PostMapping("/{id}/resume")
+    @PutMapping("/simulations/{id}/resume")
     public ResponseEntity<?> resumeSimulation(@PathVariable String id) {
-        Optional<Simulation> resumedSimulation = simulationService.resumeSimulation(id);
-        return resumedSimulation.map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        try {
+            Optional<Simulation> resumedSimulation = simulationService.resumeSimulation(id);
+            
+            return resumedSimulation.map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            logger.error("Error resuming simulation: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
     }
     
     /**
      * Stop a simulation
      */
-    @PostMapping("/{id}/stop")
+    @PutMapping("/simulations/{id}/stop")
     public ResponseEntity<?> stopSimulation(@PathVariable String id) {
-        Optional<Simulation> stoppedSimulation = simulationService.stopSimulation(id);
-        return stoppedSimulation.map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        try {
+            Optional<Simulation> stoppedSimulation = simulationService.stopSimulation(id);
+            
+            return stoppedSimulation.map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.notFound().build());
+        } catch (Exception e) {
+            logger.error("Error stopping simulation: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
     }
     
     /**
      * Get trades for a simulation
      */
-    @GetMapping("/{id}/trades")
-    public ResponseEntity<List<Trade>> getTradesForSimulation(@PathVariable String id) {
-        return ResponseEntity.ok(simulationService.getTradesForSimulation(id));
+    @GetMapping("/trades/{simulationId}")
+    public ResponseEntity<List<Trade>> getTradesForSimulation(@PathVariable String simulationId) {
+        List<Trade> trades = simulationService.getTradesForSimulation(simulationId);
+        return ResponseEntity.ok(trades);
     }
     
     /**
      * Get recent trades for a simulation
      */
-    @GetMapping("/{id}/trades/recent")
+    @GetMapping("/trades/recent/{simulationId}")
     public ResponseEntity<List<Trade>> getRecentTradesForSimulation(
-            @PathVariable String id,
+            @PathVariable String simulationId,
             @RequestParam(defaultValue = "10") int limit) {
-        return ResponseEntity.ok(simulationService.getRecentTradesForSimulation(id, limit));
+        
+        List<Trade> trades = simulationService.getRecentTradesForSimulation(simulationId, limit);
+        return ResponseEntity.ok(trades);
     }
     
     /**
      * Get recent trades for a user
      */
-    @GetMapping("/user/{userId}/trades/recent")
+    @GetMapping("/trades/user/{userId}")
     public ResponseEntity<List<Trade>> getRecentTradesForUser(
             @PathVariable String userId,
             @RequestParam(defaultValue = "10") int limit) {
-        return ResponseEntity.ok(simulationService.getRecentTradesForUser(userId, limit));
+        
+        List<Trade> trades = simulationService.getRecentTradesForUser(userId, limit);
+        return ResponseEntity.ok(trades);
     }
     
     /**
-     * Execute a trade for a simulation
+     * Execute a manual trade for a simulation
      */
-    @PostMapping("/{id}/trades")
-    public ResponseEntity<Trade> executeTrade(
-            @PathVariable String id,
-            @RequestBody Trade trade) {
-        // Set the simulation ID
-        trade.setSimulationId(id);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(simulationService.executeTrade(trade));
-    }
-    
-    /**
-     * Force a processing run for active simulations
-     */
-    @PostMapping("/process")
-    public ResponseEntity<?> processActiveSimulations() {
+    @PostMapping("/trades")
+    public ResponseEntity<?> executeTrade(@RequestBody Trade trade) {
         try {
-            simulationService.processActiveSimulations();
-            Map<String, String> response = new HashMap<>();
-            response.put("message", "Active simulations processed successfully");
-            return ResponseEntity.ok(response);
+            Trade executedTrade = simulationService.executeTrade(trade);
+            return ResponseEntity.status(HttpStatus.CREATED).body(executedTrade);
         } catch (Exception e) {
+            logger.error("Error executing trade: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+    
+    /**
+     * Process a simulation manually (trigger the strategy evaluation)
+     */
+    @PostMapping("/process/{id}")
+    public ResponseEntity<?> processSimulation(@PathVariable String id) {
+        try {
+            Optional<Simulation> simulation = simulationService.getSimulationById(id);
+            
+            if (simulation.isEmpty()) {
+                return ResponseEntity.notFound().build();
+            }
+            
+            // This will trigger the simulation processing
+            // The actual trade execution will happen asynchronously
+            simulationService.processSimulation(simulation.get());
+            
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            logger.error("Error processing simulation: {}", e.getMessage());
             Map<String, String> error = new HashMap<>();
             error.put("error", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
