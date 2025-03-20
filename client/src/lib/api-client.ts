@@ -1,106 +1,76 @@
-import { apiRequest } from "./queryClient";
+import { QueryClient } from "@tanstack/react-query";
+import { ApiResponse } from "@/types";
 
-// Market API
-export const marketApi = {
-  getTopGainers: () => 
-    apiRequest("GET", "/api/market/movers/gainers").then(res => res.json()),
-  
-  getTopLosers: () => 
-    apiRequest("GET", "/api/market/movers/losers").then(res => res.json()),
-  
-  getMarketIndices: () => 
-    apiRequest("GET", "/api/market/indices").then(res => res.json()),
-  
-  getMarketData: (filters: any) => 
-    apiRequest("GET", `/api/market/data?${new URLSearchParams(filters)}`).then(res => res.json()),
-  
-  getAssetDetails: (symbol: string) => 
-    apiRequest("GET", `/api/market/asset/${symbol}`).then(res => res.json()),
+// Export queryClient from queryClient.ts
+export { queryClient } from "./queryClient";
+
+// Function to handle API requests
+export async function apiRequest<T>(
+  method: string,
+  url: string,
+  data?: unknown
+): Promise<T> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: data ? { "Content-Type": "application/json" } : {},
+      body: data ? JSON.stringify(data) : undefined,
+      credentials: "include",
+    });
+
+    if (!res.ok) {
+      // Try to parse error message from response
+      try {
+        const errorData = await res.json();
+        throw new Error(errorData.message || `${res.status}: ${res.statusText}`);
+      } catch (parseError) {
+        throw new Error(`${res.status}: ${res.statusText}`);
+      }
+    }
+
+    // Return empty object for 204 No Content responses
+    if (res.status === 204) {
+      return {} as T;
+    }
+
+    return await res.json();
+  } catch (error) {
+    console.error(`API request failed: ${method} ${url}`, error);
+    throw error instanceof Error ? error : new Error("An unknown error occurred");
+  }
+}
+
+// Typed API request wrappers
+export const api = {
+  get: <T>(url: string) => apiRequest<T>("GET", url),
+  post: <T>(url: string, data: unknown) => apiRequest<T>("POST", url, data),
+  put: <T>(url: string, data: unknown) => apiRequest<T>("PUT", url, data),
+  patch: <T>(url: string, data: unknown) => apiRequest<T>("PATCH", url, data),
+  delete: <T>(url: string) => apiRequest<T>("DELETE", url),
 };
 
-// Simulation API
+// Market data API functions
+export const marketDataApi = {
+  getMarketData: (symbol: string) => api.get<ApiResponse<any>>(`/api/market-data?symbol=${symbol}`),
+  getMarketHistory: (symbol: string, limit: number = 100) => 
+    api.get<ApiResponse<any>>(`/api/market-data/history?symbol=${symbol}&limit=${limit}`),
+};
+
+// Simulation API functions
 export const simulationApi = {
-  getActiveSimulation: () => 
-    apiRequest("GET", "/api/simulation/active").then(res => res.json()),
-  
-  startSimulation: (data: any) => 
-    apiRequest("POST", "/api/simulation/start", data).then(res => res.json()),
-  
-  pauseSimulation: () => 
-    apiRequest("POST", "/api/simulation/pause").then(res => res.json()),
-  
-  stopSimulation: () => 
-    apiRequest("POST", "/api/simulation/stop").then(res => res.json()),
-  
-  getSimulationResults: (id: string) => 
-    apiRequest("GET", `/api/simulation/results/${id}`).then(res => res.json()),
+  getSimulations: () => api.get<ApiResponse<any>>(`/api/simulations`),
+  getSimulation: (id: number) => api.get<ApiResponse<any>>(`/api/simulations/${id}`),
+  createSimulation: (data: any) => api.post<ApiResponse<any>>(`/api/simulations`, data),
+  updateSimulation: (id: number, data: any) => api.patch<ApiResponse<any>>(`/api/simulations/${id}`, data),
 };
 
-// Trades API
-export const tradesApi = {
-  getRecentTrades: () => 
-    apiRequest("GET", "/api/trades/recent").then(res => res.json()),
-  
-  getTradeHistory: (filters: any) => 
-    apiRequest("GET", `/api/trades/history?${new URLSearchParams(filters)}`).then(res => res.json()),
+// Trade API functions
+export const tradeApi = {
+  getTrades: (simulationId?: number) => 
+    api.get<ApiResponse<any>>(simulationId ? `/api/trades?simulationId=${simulationId}` : `/api/trades`),
 };
 
-// Portfolio API
-export const portfolioApi = {
-  getSummary: () => 
-    apiRequest("GET", "/api/portfolio/summary").then(res => res.json()),
-  
-  getWatchlist: () => 
-    apiRequest("GET", "/api/watchlist").then(res => res.json()),
-  
-  addToWatchlist: (symbol: string) => 
-    apiRequest("POST", "/api/watchlist", { symbol }).then(res => res.json()),
-  
-  removeFromWatchlist: (id: string) => 
-    apiRequest("DELETE", `/api/watchlist/${id}`).then(res => res.json()),
-};
-
-// Reports API
-export const reportsApi = {
-  getPerformance: (timeRange: string) => 
-    apiRequest("GET", `/api/reports/performance?timeRange=${timeRange}`).then(res => res.json()),
-  
-  getTradesAnalysis: (timeRange: string) => 
-    apiRequest("GET", `/api/reports/trades-analysis?timeRange=${timeRange}`).then(res => res.json()),
-  
-  getAssetPerformance: (timeRange: string) => 
-    apiRequest("GET", `/api/reports/asset-performance?timeRange=${timeRange}`).then(res => res.json()),
-};
-
-// User API
-export const userApi = {
-  updateProfile: (data: any) => 
-    apiRequest("PATCH", "/api/user/profile", data).then(res => res.json()),
-  
-  changePassword: (data: any) => 
-    apiRequest("POST", "/api/user/change-password", data).then(res => res.json()),
-  
-  updateNotifications: (data: any) => 
-    apiRequest("PATCH", "/api/user/notifications", data).then(res => res.json()),
-  
-  getApiKeys: () => 
-    apiRequest("GET", "/api/user/api-keys").then(res => res.json()),
-  
-  addApiKey: (data: any) => 
-    apiRequest("POST", "/api/user/api-keys", data).then(res => res.json()),
-  
-  deleteApiKey: (id: string) => 
-    apiRequest("DELETE", `/api/user/api-keys/${id}`).then(res => res.json()),
-  
-  updateApiKey: (id: string, data: any) => 
-    apiRequest("PATCH", `/api/user/api-keys/${id}`, data).then(res => res.json()),
-};
-
-// API Status
-export const apiStatusApi = {
-  getStatus: () => 
-    apiRequest("GET", "/api/api-status").then(res => res.json()),
-  
-  testConnection: (service: string) => 
-    apiRequest("POST", "/api/test-api-connection", { service }).then(res => res.json()),
+// Strategy API functions
+export const strategyApi = {
+  getStrategies: () => api.get<ApiResponse<any>>(`/api/strategies`),
 };
