@@ -1,132 +1,140 @@
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowUp, ArrowDown } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Trade } from "@shared/schema";
+import { Button } from "@/components/ui/button";
+import { Link } from "wouter";
 
-interface RecentTradesProps {
+type Trade = {
+  id: string;
+  symbol: string;
+  assetName: string;
+  exchange: string;
+  type: 'buy' | 'sell';
+  amount: number;
+  price: number;
+  profitLoss: number;
+  profitLossPercentage: number;
+  timestamp: string;
+  assetType: 'stocks' | 'crypto';
+};
+
+type RecentTradesProps = {
+  isLoading: boolean;
   trades?: Trade[];
-  loading?: boolean;
-}
+};
 
-export default function RecentTrades({ trades, loading = false }: RecentTradesProps) {
-  // Format time ago
-  const formatTimeAgo = (timestamp: string | Date) => {
-    const now = new Date();
-    const date = new Date(timestamp);
-    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-    
-    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
-    if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m ago`;
-    if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h ago`;
-    return `${Math.floor(diffInSeconds / 86400)}d ago`;
-  };
-  
-  // Format symbol display name
-  const formatSymbolName = (symbol: string) => {
-    const symbolMap: Record<string, string> = {
-      "NIFTY50.NS": "NIFTY 50",
-      "SENSEX.BO": "BSE SENSEX",
-      "HDFCBANK.NS": "HDFC Bank",
-      "RELIANCE.NS": "Reliance",
-      "TCS.NS": "TCS",
-      "INFY.NS": "Infosys",
-      "BTCINR=X": "Bitcoin/INR",
-      "ETHINR=X": "Ethereum/INR",
-    };
-    
-    return symbolMap[symbol] || symbol;
-  };
-  
-  // Format price to Indian rupees
-  const formatPrice = (price: number) => {
-    if (price === undefined || price === null) return "₹0";
-    
-    // Format using Indian system
-    const formatter = new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    });
-    
-    return formatter.format(price);
-  };
-  
-  // Get the most recent trades, limited to 4
-  const recentTrades = trades 
-    ? trades
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(0, 4)
-    : [];
-  
+export default function RecentTrades({ isLoading, trades }: RecentTradesProps) {
+  // Default empty state when no trades are found
+  const noTrades = (!trades || trades.length === 0) && !isLoading;
+
   return (
-    <Card>
-      <CardContent className="p-5">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-lg font-medium">Recent Trades</h2>
-          <a href="#" className="text-primary text-sm hover:underline">View All</a>
+    <Card className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="p-5 border-b border-gray-200">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-700">Recent Trades</h2>
+          <Link href="/history">
+            <Button variant="link" className="text-sm text-primary hover:text-blue-700">
+              View All
+            </Button>
+          </Link>
         </div>
-        
-        {loading ? (
-          <div className="space-y-5">
-            {[...Array(4)].map((_, index) => (
-              <div key={index} className="flex items-center p-3 border border-border rounded-lg">
-                <Skeleton className="w-10 h-10 rounded-full mr-4" />
-                <div className="flex-1">
-                  <Skeleton className="h-4 w-24 mb-2" />
-                  <Skeleton className="h-3 w-32" />
-                </div>
-                <div className="text-right">
-                  <Skeleton className="h-4 w-16 mb-2" />
-                  <Skeleton className="h-3 w-10 ml-auto" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : recentTrades.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
-            No trades have been executed yet.
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {recentTrades.map((trade) => (
-              <div key={trade.id} className="flex items-center p-3 border border-border rounded-lg">
-                <div className={cn(
-                  "w-10 h-10 rounded-full flex items-center justify-center mr-4",
-                  trade.type === "buy" 
-                    ? "bg-green-100 dark:bg-green-900 dark:bg-opacity-30" 
-                    : "bg-red-100 dark:bg-red-900 dark:bg-opacity-30"
-                )}>
-                  {trade.type === "buy" ? (
-                    <ArrowUp className="text-green-500" />
-                  ) : (
-                    <ArrowDown className="text-red-500" />
-                  )}
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-medium">{formatSymbolName(trade.symbol)}</h3>
-                  <p className="text-xs text-muted-foreground">
-                    {formatTimeAgo(trade.timestamp)} • {trade.type.charAt(0).toUpperCase() + trade.type.slice(1)} • {formatPrice(trade.amount)}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <span className={cn(
-                    "font-medium",
-                    (trade.profitLoss || 0) >= 0 ? "text-green-500" : "text-red-500"
-                  )}>
-                    {(trade.profitLoss || 0) >= 0 ? "+" : ""}{formatPrice(trade.profitLoss || 0)}
-                  </span>
-                  <p className="text-xs text-muted-foreground">
-                    {(trade.profitLossPercent || 0) >= 0 ? "+" : ""}
-                    {(trade.profitLossPercent || 0).toFixed(2)}%
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
+      </div>
+      <div className="p-0">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Asset</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">P/L</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {isLoading ? (
+                // Loading skeleton
+                Array(3).fill(0).map((_, i) => (
+                  <tr key={`skeleton-${i}`}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <Skeleton className="h-8 w-8 rounded-full" />
+                        <div className="ml-3">
+                          <Skeleton className="h-4 w-20" />
+                          <Skeleton className="h-3 w-12 mt-1" />
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Skeleton className="h-6 w-12 rounded-full" />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Skeleton className="h-4 w-16" />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Skeleton className="h-4 w-16" />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Skeleton className="h-4 w-20" />
+                    </td>
+                  </tr>
+                ))
+              ) : noTrades ? (
+                <tr>
+                  <td colSpan={5} className="px-6 py-8 text-center text-sm text-gray-500">
+                    No recent trades found
+                  </td>
+                </tr>
+              ) : (
+                trades?.map((trade) => (
+                  <tr key={trade.id}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className={`flex-shrink-0 h-8 w-8 rounded-full ${
+                          trade.assetType === 'crypto' ? 'bg-green-100' : 'bg-blue-100'
+                        } flex items-center justify-center`}>
+                          <span className={`text-xs font-medium ${
+                            trade.assetType === 'crypto' ? 'text-green-800' : 'text-blue-800'
+                          }`}>
+                            {trade.symbol}
+                          </span>
+                        </div>
+                        <div className="ml-3">
+                          <div className="text-sm font-medium text-gray-900">{trade.assetName}</div>
+                          <div className="text-xs text-gray-500">{trade.exchange}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <Badge 
+                        className={`px-2 py-1 text-xs font-medium rounded-full ${
+                          trade.type === 'buy' 
+                            ? 'bg-green-100 text-green-800' 
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        {trade.type === 'buy' ? 'Buy' : 'Sell'}
+                      </Badge>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap font-mono text-sm text-gray-900">
+                      ₹{trade.amount.toLocaleString('en-IN')}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap font-mono text-sm text-gray-900">
+                      ₹{trade.price.toLocaleString('en-IN')}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap font-mono text-sm">
+                      <span className={trade.profitLoss >= 0 ? 'text-green-600' : 'text-red-600'}>
+                        {trade.profitLoss >= 0 ? '+' : ''}₹{Math.abs(trade.profitLoss).toLocaleString('en-IN')} 
+                        {' '}({trade.profitLoss >= 0 ? '+' : ''}{trade.profitLossPercentage}%)
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </Card>
   );
 }

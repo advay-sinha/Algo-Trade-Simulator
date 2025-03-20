@@ -2,196 +2,231 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
-import { fetchAllMarketData, fetchMarketData, checkAndRunSimulations } from "./api";
-import { InsertSimulationSchema, insertSimulationSchema } from "@shared/schema";
-import { z } from "zod";
-import cron from "node-cron";
+import marketRouter from "./api/market";
+import simulationRouter from "./api/simulation";
+import tradesRouter from "./api/trades";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Setup authentication
+  // sets up /api/register, /api/login, /api/logout, /api/user
   setupAuth(app);
-  
-  // Setup cron jobs for market data fetching and simulation runs
-  setupCronJobs();
-  
-  // Market data endpoints
-  app.get("/api/market-data", async (req, res) => {
-    try {
-      const symbol = req.query.symbol as string;
-      if (!symbol) {
-        return res.status(400).json({ message: "Symbol is required" });
-      }
-      
-      // Get market data from storage
-      let marketData = await storage.getMarketData(symbol);
-      
-      // If no data exists or data is older than 5 minutes, fetch fresh data
-      const now = new Date();
-      if (!marketData || (now.getTime() - new Date(marketData.timestamp).getTime() > 5 * 60 * 1000)) {
-        const freshData = await fetchMarketData(symbol);
-        if (freshData) {
-          marketData = await storage.addMarketData(freshData);
-        }
-      }
-      
-      if (!marketData) {
-        return res.status(404).json({ message: "Market data not found" });
-      }
-      
-      res.json(marketData);
-    } catch (error) {
-      console.error("Error fetching market data:", error);
-      res.status(500).json({ message: "Failed to fetch market data" });
-    }
-  });
-  
-  app.get("/api/market-data/history", async (req, res) => {
-    try {
-      const symbol = req.query.symbol as string;
-      const limitStr = req.query.limit as string;
-      
-      if (!symbol) {
-        return res.status(400).json({ message: "Symbol is required" });
-      }
-      
-      const limit = limitStr ? parseInt(limitStr, 10) : 100;
-      const history = await storage.getMarketDataHistory(symbol, limit);
-      res.json(history);
-    } catch (error) {
-      console.error("Error fetching market data history:", error);
-      res.status(500).json({ message: "Failed to fetch market data history" });
-    }
-  });
-  
-  // Simulation endpoints
-  app.post("/api/simulations", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
-      
-      // Validate request body
-      const validationResult = insertSimulationSchema.safeParse(req.body);
-      if (!validationResult.success) {
-        return res.status(400).json({ message: "Invalid simulation data", errors: validationResult.error.errors });
-      }
-      
-      const simulationData = {
-        ...validationResult.data,
-        userId: req.user!.id
-      };
-      
-      // Create simulation
-      const simulation = await storage.addSimulation(simulationData);
-      res.status(201).json(simulation);
-    } catch (error) {
-      console.error("Error creating simulation:", error);
-      res.status(500).json({ message: "Failed to create simulation" });
-    }
-  });
-  
-  app.get("/api/simulations", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
-      
-      const simulations = await storage.getUserSimulations(req.user!.id);
-      res.json(simulations);
-    } catch (error) {
-      console.error("Error fetching simulations:", error);
-      res.status(500).json({ message: "Failed to fetch simulations" });
-    }
-  });
-  
-  app.get("/api/simulations/:id", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
-      
-      const simulationId = parseInt(req.params.id, 10);
-      const simulation = await storage.getSimulation(simulationId);
-      
-      if (!simulation) {
-        return res.status(404).json({ message: "Simulation not found" });
-      }
-      
-      // Ensure user can only access their own simulations
-      if (simulation.userId !== req.user!.id) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-      
-      res.json(simulation);
-    } catch (error) {
-      console.error("Error fetching simulation:", error);
-      res.status(500).json({ message: "Failed to fetch simulation" });
-    }
-  });
-  
-  // Trades endpoints
-  app.get("/api/trades", async (req, res) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Authentication required" });
-      }
-      
-      const simulationId = req.query.simulationId ? parseInt(req.query.simulationId as string, 10) : undefined;
-      
-      let trades;
-      if (simulationId) {
-        // Get trades for a specific simulation
-        const simulation = await storage.getSimulation(simulationId);
-        
-        // Ensure user can only access their own simulations' trades
-        if (!simulation || simulation.userId !== req.user!.id) {
-          return res.status(403).json({ message: "Access denied" });
-        }
-        
-        trades = await storage.getSimulationTrades(simulationId);
-      } else {
-        // Get user's trades
-        trades = await storage.getUserTrades(req.user!.id);
-      }
-      
-      res.json(trades);
-    } catch (error) {
-      console.error("Error fetching trades:", error);
-      res.status(500).json({ message: "Failed to fetch trades" });
-    }
-  });
-  
-  // Strategies endpoints
-  app.get("/api/strategies", async (req, res) => {
-    try {
-      const strategies = await storage.getAllStrategies();
-      res.json(strategies);
-    } catch (error) {
-      console.error("Error fetching strategies:", error);
-      res.status(500).json({ message: "Failed to fetch strategies" });
-    }
-  });
-  
-  const httpServer = createServer(app);
-  return httpServer;
-}
 
-function setupCronJobs() {
-  // Fetch market data every 5 minutes
-  cron.schedule("*/5 * * * *", async () => {
-    console.log("Running scheduled market data update");
-    await fetchAllMarketData();
+  // API routes
+  app.use("/api/market", marketRouter);
+  app.use("/api/simulation", simulationRouter);
+  app.use("/api/trades", tradesRouter);
+
+  // API user endpoints
+  app.get("/api/portfolio/summary", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const summary = await storage.getPortfolioSummary(userId);
+      res.json(summary);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/watchlist", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const watchlist = await storage.getWatchlist(userId);
+      res.json(watchlist);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/reports/performance", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const timeRange = req.query.timeRange as string || "1m";
+      
+      const performanceData = await storage.getPerformanceReportData(userId, timeRange);
+      res.json(performanceData);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/reports/trades-analysis", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const timeRange = req.query.timeRange as string || "1m";
+      
+      const tradesAnalysis = await storage.getTradesAnalysisData(userId, timeRange);
+      res.json(tradesAnalysis);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/reports/asset-performance", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const timeRange = req.query.timeRange as string || "1m";
+      
+      const assetPerformance = await storage.getAssetPerformanceData(userId, timeRange);
+      res.json(assetPerformance);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/api-status", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const apiStatus = await storage.getApiStatus(req.user!.id);
+      res.json(apiStatus);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/test-api-connection", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const { service } = req.body;
+      
+      if (!service) {
+        return res.status(400).json({ message: "Service parameter is required" });
+      }
+      
+      const result = await storage.testApiConnection(service);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
   });
   
-  // Run simulations every 2 hours
-  cron.schedule("0 */2 * * *", async () => {
-    console.log("Running scheduled simulations");
-    await checkAndRunSimulations();
+  app.get("/api/user/api-keys", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const apiKeys = await storage.getUserApiKeys(userId);
+      res.json(apiKeys);
+    } catch (error) {
+      next(error);
+    }
   });
   
-  // Initial data fetch on startup
-  setTimeout(async () => {
-    console.log("Performing initial market data fetch");
-    await fetchAllMarketData();
-  }, 5000);
+  app.post("/api/user/api-keys", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const { name, service, apiKey } = req.body;
+      
+      if (!name || !service || !apiKey) {
+        return res.status(400).json({ message: "Name, service, and apiKey are required" });
+      }
+      
+      const newKey = await storage.addApiKey(userId, {
+        name,
+        service,
+        apiKey
+      });
+      
+      res.status(201).json(newKey);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  app.delete("/api/user/api-keys/:id", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const keyId = req.params.id;
+      
+      await storage.deleteApiKey(userId, keyId);
+      res.status(200).json({ message: "API key deleted successfully" });
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  app.patch("/api/user/api-keys/:id", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const keyId = req.params.id;
+      const { active } = req.body;
+      
+      const updatedKey = await storage.updateApiKey(userId, keyId, { active });
+      res.json(updatedKey);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Get user notifications
+  app.get("/api/user/notifications", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const notifications = await storage.getUserNotifications(userId);
+      res.json(notifications);
+    } catch (error) {
+      next(error);
+    }
+  });
+  
+  // Update user notifications
+  app.patch("/api/user/notifications", async (req, res, next) => {
+    try {
+      if (!req.isAuthenticated()) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      
+      const userId = req.user!.id;
+      const updatedNotifications = await storage.updateUserNotifications(userId, req.body);
+      res.json(updatedNotifications);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  const httpServer = createServer(app);
+
+  return httpServer;
 }

@@ -1,31 +1,47 @@
-import { useState, useEffect } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
-import { insertUserSchema } from "@shared/schema";
+import { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
-import { useLocation } from "wouter";
-import { Card, CardContent } from "@/components/ui/card";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { Loader2, ChartLine, Moon, Sun } from "lucide-react";
-import { FaGoogle, FaGithub } from "react-icons/fa";
-import { useTheme } from "@/hooks/use-theme";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Card, CardContent } from "@/components/ui/card";
+import { useLocation } from "wouter";
+import { Loader2 } from "lucide-react";
 
-// Login schema
 const loginSchema = z.object({
-  username: z.string().min(1, "Username is required"),
-  password: z.string().min(1, "Password is required"),
+  username: z.string().min(3, {
+    message: "Username must be at least 3 characters long",
+  }),
+  password: z.string().min(6, {
+    message: "Password must be at least 6 characters long",
+  }),
+  rememberMe: z.boolean().optional(),
 });
 
-// Register schema extends the insertUserSchema
-const registerSchema = insertUserSchema.extend({
-  password: z.string().min(6, "Password must be at least 6 characters"),
-  confirmPassword: z.string().min(1, "Please confirm your password"),
+const registerSchema = z.object({
+  firstName: z.string().min(2, {
+    message: "First name must be at least 2 characters long",
+  }),
+  lastName: z.string().min(2, {
+    message: "Last name must be at least 2 characters long",
+  }),
+  username: z.string().min(3, {
+    message: "Username must be at least 3 characters long",
+  }),
+  password: z.string().min(6, {
+    message: "Password must be at least 6 characters long",
+  }),
+  confirmPassword: z.string().min(6, {
+    message: "Password must be at least 6 characters long",
+  }),
+  agreeTerms: z.literal(true, {
+    errorMap: () => ({ message: "You must agree to the terms and privacy policy" }),
+  }),
 }).refine((data) => data.password === data.confirmPassword, {
-  message: "Passwords do not match",
+  message: "Passwords don't match",
   path: ["confirmPassword"],
 });
 
@@ -33,282 +49,284 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 type RegisterFormValues = z.infer<typeof registerSchema>;
 
 export default function AuthPage() {
-  const [showSignUp, setShowSignUp] = useState(false);
-  const { user, isLoading, loginMutation, registerMutation } = useAuth();
-  const [, setLocation] = useLocation();
-  const { theme, toggleTheme } = useTheme();
-  const isDarkMode = theme === "dark";
+  const [isSignUp, setIsSignUp] = useState(false);
+  const { user, loginMutation, registerMutation } = useAuth();
+  const [, navigate] = useLocation();
 
-  // Redirect if already logged in
-  useEffect(() => {
-    if (user) {
-      setLocation("/");
-    }
-  }, [user, setLocation]);
+  // Redirect if user is already logged in
+  if (user) {
+    navigate("/");
+    return null;
+  }
 
-  // Login form
   const loginForm = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
       username: "",
       password: "",
+      rememberMe: false,
     },
   });
 
-  // Register form
   const registerForm = useForm<RegisterFormValues>({
     resolver: zodResolver(registerSchema),
     defaultValues: {
+      firstName: "",
+      lastName: "",
       username: "",
-      email: "",
       password: "",
       confirmPassword: "",
-      fullName: "",
+      agreeTerms: false,
     },
   });
 
-  const onLoginSubmit = (data: LoginFormValues) => {
-    loginMutation.mutate(data);
+  const onLoginSubmit = (values: LoginFormValues) => {
+    loginMutation.mutate({
+      username: values.username,
+      password: values.password,
+    });
   };
 
-  const onRegisterSubmit = (data: RegisterFormValues) => {
-    const { confirmPassword, ...registerData } = data;
-    registerMutation.mutate(registerData);
+  const onRegisterSubmit = (values: RegisterFormValues) => {
+    registerMutation.mutate({
+      username: values.username,
+      password: values.password,
+      firstName: values.firstName,
+      lastName: values.lastName,
+    });
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-background">
-      <Card className="w-full max-w-md">
-        <CardContent className="pt-6">
-          {/* Logo */}
-          <div className="flex justify-center mb-8">
-            <div className="flex items-center">
-              <ChartLine className="h-8 w-8 text-primary mr-2" />
-              <h1 className="text-2xl font-bold">AlgoTrade</h1>
-            </div>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-50 p-4">
+      <div className="w-full max-w-md">
+        <Card className="bg-white rounded-xl shadow-lg overflow-hidden">
+          <div className="p-6 bg-primary text-white text-center">
+            <h1 className="text-2xl font-bold mb-1">AlgoTrade</h1>
+            <p className="text-blue-100">Algorithmic Trading Simulator</p>
           </div>
           
-          {/* Form Toggle */}
-          <div className="flex justify-center mb-8">
-            <div className="inline-flex rounded-md shadow-sm" role="group">
-              <Button
-                variant={!showSignUp ? "default" : "outline"}
-                onClick={() => setShowSignUp(false)}
-                className={!showSignUp ? "" : "text-muted-foreground"}
-              >
-                Sign In
-              </Button>
-              <Button
-                variant={showSignUp ? "default" : "outline"}
-                onClick={() => setShowSignUp(true)}
-                className={showSignUp ? "" : "text-muted-foreground"}
-              >
-                Sign Up
-              </Button>
-            </div>
-          </div>
-          
-          {/* Sign In Form */}
-          {!showSignUp && (
-            <form onSubmit={loginForm.handleSubmit(onLoginSubmit)}>
-              <div className="mb-4">
-                <Label htmlFor="login-username">Username</Label>
-                <Input
-                  id="login-username"
-                  type="text"
-                  placeholder="username"
-                  {...loginForm.register("username")}
-                  className="mt-1"
-                />
-                {loginForm.formState.errors.username && (
-                  <p className="text-sm text-destructive mt-1">
-                    {loginForm.formState.errors.username.message}
+          <CardContent className="p-6">
+            {!isSignUp ? (
+              <div>
+                <h2 className="text-xl font-semibold mb-4">Sign In</h2>
+                <Form {...loginForm}>
+                  <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
+                    <FormField
+                      control={loginForm.control}
+                      name="username"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Username</FormLabel>
+                          <FormControl>
+                            <Input 
+                              placeholder="Enter your username" 
+                              {...field} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={loginForm.control}
+                      name="password"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Password</FormLabel>
+                          <FormControl>
+                            <Input 
+                              type="password" 
+                              placeholder="••••••••" 
+                              {...field} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <div className="flex items-center justify-between">
+                      <FormField
+                        control={loginForm.control}
+                        name="rememberMe"
+                        render={({ field }) => (
+                          <FormItem className="flex flex-row items-center space-x-2 space-y-0">
+                            <FormControl>
+                              <Checkbox 
+                                checked={field.value} 
+                                onCheckedChange={field.onChange} 
+                              />
+                            </FormControl>
+                            <div className="space-y-1 leading-none">
+                              <FormLabel>Remember me</FormLabel>
+                            </div>
+                          </FormItem>
+                        )}
+                      />
+                      <div className="text-sm">
+                        <a href="#" className="text-primary hover:text-blue-700">Forgot password?</a>
+                      </div>
+                    </div>
+                    <Button 
+                      type="submit" 
+                      className="w-full"
+                      disabled={loginMutation.isPending}
+                    >
+                      {loginMutation.isPending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Sign In
+                    </Button>
+                  </form>
+                </Form>
+                <div className="mt-4 text-center text-sm">
+                  <p>Don't have an account? 
+                    <Button 
+                      variant="link" 
+                      onClick={() => setIsSignUp(true)} 
+                      className="text-primary hover:text-blue-700 font-medium"
+                    >
+                      Sign Up
+                    </Button>
                   </p>
-                )}
+                </div>
               </div>
-              
-              <div className="mb-6">
-                <Label htmlFor="login-password">Password</Label>
-                <Input
-                  id="login-password"
-                  type="password"
-                  placeholder="••••••••"
-                  {...loginForm.register("password")}
-                  className="mt-1"
-                />
-                {loginForm.formState.errors.password && (
-                  <p className="text-sm text-destructive mt-1">
-                    {loginForm.formState.errors.password.message}
+            ) : (
+              <div>
+                <h2 className="text-xl font-semibold mb-4">Create an Account</h2>
+                <Form {...registerForm}>
+                  <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <FormField
+                        control={registerForm.control}
+                        name="firstName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>First Name</FormLabel>
+                            <FormControl>
+                              <Input 
+                                placeholder="John" 
+                                {...field} 
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={registerForm.control}
+                        name="lastName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Last Name</FormLabel>
+                            <FormControl>
+                              <Input 
+                                placeholder="Doe" 
+                                {...field} 
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                    <FormField
+                      control={registerForm.control}
+                      name="username"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Username</FormLabel>
+                          <FormControl>
+                            <Input 
+                              placeholder="Choose a username" 
+                              {...field} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={registerForm.control}
+                      name="password"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Password</FormLabel>
+                          <FormControl>
+                            <Input 
+                              type="password" 
+                              placeholder="••••••••" 
+                              {...field} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={registerForm.control}
+                      name="confirmPassword"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Confirm Password</FormLabel>
+                          <FormControl>
+                            <Input 
+                              type="password" 
+                              placeholder="••••••••" 
+                              {...field} 
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={registerForm.control}
+                      name="agreeTerms"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-row items-start space-x-2 space-y-0">
+                          <FormControl>
+                            <Checkbox 
+                              checked={field.value} 
+                              onCheckedChange={field.onChange} 
+                            />
+                          </FormControl>
+                          <div className="space-y-1 leading-none pt-0.5">
+                            <FormLabel className="text-sm">
+                              I agree to the <a href="#" className="text-primary hover:text-blue-700">Terms</a> and <a href="#" className="text-primary hover:text-blue-700">Privacy Policy</a>
+                            </FormLabel>
+                            <FormMessage />
+                          </div>
+                        </FormItem>
+                      )}
+                    />
+                    <Button 
+                      type="submit" 
+                      className="w-full"
+                      disabled={registerMutation.isPending}
+                    >
+                      {registerMutation.isPending ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Sign Up
+                    </Button>
+                  </form>
+                </Form>
+                <div className="mt-4 text-center text-sm">
+                  <p>Already have an account? 
+                    <Button 
+                      variant="link" 
+                      onClick={() => setIsSignUp(false)} 
+                      className="text-primary hover:text-blue-700 font-medium"
+                    >
+                      Sign In
+                    </Button>
                   </p>
-                )}
+                </div>
               </div>
-              
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={loginMutation.isPending}
-              >
-                {loginMutation.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Sign In
-              </Button>
-              
-              <div className="mt-4 text-center text-sm text-muted-foreground">
-                <a href="#" className="text-primary hover:underline">
-                  Forgot password?
-                </a>
-              </div>
-            </form>
-          )}
-          
-          {/* Sign Up Form */}
-          {showSignUp && (
-            <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)}>
-              <div className="mb-4">
-                <Label htmlFor="register-fullname">Full Name</Label>
-                <Input
-                  id="register-fullname"
-                  type="text"
-                  placeholder="John Doe"
-                  {...registerForm.register("fullName")}
-                  className="mt-1"
-                />
-                {registerForm.formState.errors.fullName && (
-                  <p className="text-sm text-destructive mt-1">
-                    {registerForm.formState.errors.fullName.message}
-                  </p>
-                )}
-              </div>
-              
-              <div className="mb-4">
-                <Label htmlFor="register-email">Email</Label>
-                <Input
-                  id="register-email"
-                  type="email"
-                  placeholder="your@email.com"
-                  {...registerForm.register("email")}
-                  className="mt-1"
-                />
-                {registerForm.formState.errors.email && (
-                  <p className="text-sm text-destructive mt-1">
-                    {registerForm.formState.errors.email.message}
-                  </p>
-                )}
-              </div>
-              
-              <div className="mb-4">
-                <Label htmlFor="register-username">Username</Label>
-                <Input
-                  id="register-username"
-                  type="text"
-                  placeholder="username"
-                  {...registerForm.register("username")}
-                  className="mt-1"
-                />
-                {registerForm.formState.errors.username && (
-                  <p className="text-sm text-destructive mt-1">
-                    {registerForm.formState.errors.username.message}
-                  </p>
-                )}
-              </div>
-              
-              <div className="mb-4">
-                <Label htmlFor="register-password">Password</Label>
-                <Input
-                  id="register-password"
-                  type="password"
-                  placeholder="••••••••"
-                  {...registerForm.register("password")}
-                  className="mt-1"
-                />
-                {registerForm.formState.errors.password && (
-                  <p className="text-sm text-destructive mt-1">
-                    {registerForm.formState.errors.password.message}
-                  </p>
-                )}
-              </div>
-              
-              <div className="mb-6">
-                <Label htmlFor="register-confirm-password">Confirm Password</Label>
-                <Input
-                  id="register-confirm-password"
-                  type="password"
-                  placeholder="••••••••"
-                  {...registerForm.register("confirmPassword")}
-                  className="mt-1"
-                />
-                {registerForm.formState.errors.confirmPassword && (
-                  <p className="text-sm text-destructive mt-1">
-                    {registerForm.formState.errors.confirmPassword.message}
-                  </p>
-                )}
-              </div>
-              
-              <Button
-                type="submit"
-                className="w-full"
-                disabled={registerMutation.isPending}
-              >
-                {registerMutation.isPending ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Create Account
-              </Button>
-            </form>
-          )}
-          
-          {/* Social Login */}
-          <div className="mt-8">
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <Separator className="w-full" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-background text-muted-foreground">
-                  Or continue with
-                </span>
-              </div>
-            </div>
-            
-            <div className="mt-6 grid grid-cols-2 gap-3">
-              <Button variant="outline" className="w-full">
-                <FaGoogle className="mr-2 h-4 w-4 text-red-500" />
-                Google
-              </Button>
-              <Button variant="outline" className="w-full">
-                <FaGithub className="mr-2 h-4 w-4" />
-                GitHub
-              </Button>
-            </div>
-          </div>
-          
-          {/* Dark mode toggle */}
-          <div className="mt-8 flex justify-center">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-muted-foreground"
-              onClick={toggleTheme}
-            >
-              {isDarkMode ? (
-                <Sun className="h-4 w-4 mr-2" />
-              ) : (
-                <Moon className="h-4 w-4 mr-2" />
-              )}
-              {isDarkMode ? "Light Mode" : "Dark Mode"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
