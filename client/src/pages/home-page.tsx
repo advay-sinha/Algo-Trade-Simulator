@@ -2,12 +2,12 @@ import { useEffect } from "react";
 import { useLocation } from "wouter";
 
 export default function HomePage() {
-  const [, setLocation] = useLocation();
-  
+  const [, navigate] = useLocation();
+
+  // Redirect to dashboard
   useEffect(() => {
-    // Redirect to dashboard
-    setLocation("/dashboard");
-  }, [setLocation]);
-  
+    navigate("/dashboard");
+  }, [navigate]);
+
   return null;
 }

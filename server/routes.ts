@@ -2,231 +2,124 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
-import marketRouter from "./api/market";
-import simulationRouter from "./api/simulation";
-import tradesRouter from "./api/trades";
+import marketRoutes from "./api/market";
+import simulationRoutes from "./api/simulation";
+import cron from "node-cron";
+import { generateTrade } from "./utils/trade";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // sets up /api/register, /api/login, /api/logout, /api/user
+  // Set up authentication
   setupAuth(app);
-
-  // API routes
-  app.use("/api/market", marketRouter);
-  app.use("/api/simulation", simulationRouter);
-  app.use("/api/trades", tradesRouter);
-
-  // API user endpoints
-  app.get("/api/portfolio/summary", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const summary = await storage.getPortfolioSummary(userId);
-      res.json(summary);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/watchlist", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const watchlist = await storage.getWatchlist(userId);
-      res.json(watchlist);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/reports/performance", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const timeRange = req.query.timeRange as string || "1m";
-      
-      const performanceData = await storage.getPerformanceReportData(userId, timeRange);
-      res.json(performanceData);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/reports/trades-analysis", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const timeRange = req.query.timeRange as string || "1m";
-      
-      const tradesAnalysis = await storage.getTradesAnalysisData(userId, timeRange);
-      res.json(tradesAnalysis);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/reports/asset-performance", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const timeRange = req.query.timeRange as string || "1m";
-      
-      const assetPerformance = await storage.getAssetPerformanceData(userId, timeRange);
-      res.json(assetPerformance);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/api-status", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const apiStatus = await storage.getApiStatus(req.user!.id);
-      res.json(apiStatus);
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/test-api-connection", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const { service } = req.body;
-      
-      if (!service) {
-        return res.status(400).json({ message: "Service parameter is required" });
-      }
-      
-      const result = await storage.testApiConnection(service);
-      res.json(result);
-    } catch (error) {
-      next(error);
-    }
+  
+  // Register API routes
+  app.use("/api/market", marketRoutes);
+  app.use("/api/simulation", simulationRoutes);
+  
+  // Simple health check endpoint
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "ok" });
   });
   
-  app.get("/api/user/api-keys", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const apiKeys = await storage.getUserApiKeys(userId);
-      res.json(apiKeys);
-    } catch (error) {
-      next(error);
-    }
-  });
-  
-  app.post("/api/user/api-keys", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const { name, service, apiKey } = req.body;
-      
-      if (!name || !service || !apiKey) {
-        return res.status(400).json({ message: "Name, service, and apiKey are required" });
-      }
-      
-      const newKey = await storage.addApiKey(userId, {
-        name,
-        service,
-        apiKey
-      });
-      
-      res.status(201).json(newKey);
-    } catch (error) {
-      next(error);
-    }
-  });
-  
-  app.delete("/api/user/api-keys/:id", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const keyId = req.params.id;
-      
-      await storage.deleteApiKey(userId, keyId);
-      res.status(200).json({ message: "API key deleted successfully" });
-    } catch (error) {
-      next(error);
-    }
-  });
-  
-  app.patch("/api/user/api-keys/:id", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const keyId = req.params.id;
-      const { active } = req.body;
-      
-      const updatedKey = await storage.updateApiKey(userId, keyId, { active });
-      res.json(updatedKey);
-    } catch (error) {
-      next(error);
-    }
-  });
-  
-  // Get user notifications
-  app.get("/api/user/notifications", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const notifications = await storage.getUserNotifications(userId);
-      res.json(notifications);
-    } catch (error) {
-      next(error);
-    }
-  });
-  
-  // Update user notifications
-  app.patch("/api/user/notifications", async (req, res, next) => {
-    try {
-      if (!req.isAuthenticated()) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      
-      const userId = req.user!.id;
-      const updatedNotifications = await storage.updateUserNotifications(userId, req.body);
-      res.json(updatedNotifications);
-    } catch (error) {
-      next(error);
-    }
-  });
-
   const httpServer = createServer(app);
+  
+  // Set up cron job to simulate trades every 2 hours
+  cron.schedule("0 */2 * * *", async () => {
+    try {
+      console.log("Running scheduled trade simulation...");
+      
+      // Get all active simulations
+      const activeSimulations = [];
+      for (const sim of storage._simulations.values()) {
+        if (sim.status === "active") {
+          activeSimulations.push(sim);
+        }
+      }
+      
+      console.log(`Found ${activeSimulations.length} active simulations`);
+      
+      // Process each simulation
+      for (const simulation of activeSimulations) {
+        // Get market data for the symbol
+        const marketData = await storage.getLatestMarketData(simulation.symbolId);
+        if (!marketData) continue;
+        
+        // Get previous trades
+        const previousTrades = await storage.getTrades(simulation.id);
+        
+        // Generate a new trade
+        const tradeData = generateTrade(simulation, marketData, previousTrades);
+        
+        // Create the trade
+        const trade = await storage.createTrade(tradeData);
+        
+        // Calculate profit/loss
+        let totalInvested = 0;
+        let currentValue = 0;
+        
+        // Sum up all trades
+        for (const t of [...previousTrades, trade]) {
+          if (t.type === 'buy') {
+            totalInvested += t.amount;
+          } else if (t.type === 'sell') {
+            totalInvested -= t.amount;
+          }
+        }
+        
+        // Calculate current value based on latest price
+        const totalShares = previousTrades.concat(trade).reduce((sum, t) => {
+          return t.type === 'buy' ? sum + t.quantity : sum - t.quantity;
+        }, 0);
+        
+        currentValue = totalShares * marketData.close;
+        
+        // Calculate profit/loss
+        const profitLoss = currentValue - totalInvested;
+        const profitLossPercentage = totalInvested > 0 ? (profitLoss / totalInvested) * 100 : 0;
+        
+        // Update simulation with profit/loss
+        await storage.updateSimulation(simulation.id, {
+          profitLoss,
+          profitLossPercentage
+        });
+        
+        // Check if the simulation should be completed based on timeperiod
+        const now = new Date();
+        const startTime = simulation.startTime;
+        let shouldComplete = false;
+        
+        switch (simulation.timeperiod) {
+          case '6 Hours':
+            shouldComplete = (now.getTime() - startTime.getTime()) >= 6 * 60 * 60 * 1000;
+            break;
+          case '12 Hours':
+            shouldComplete = (now.getTime() - startTime.getTime()) >= 12 * 60 * 60 * 1000;
+            break;
+          case '24 Hours':
+            shouldComplete = (now.getTime() - startTime.getTime()) >= 24 * 60 * 60 * 1000;
+            break;
+          case '3 Days':
+            shouldComplete = (now.getTime() - startTime.getTime()) >= 3 * 24 * 60 * 60 * 1000;
+            break;
+          case '1 Week':
+            shouldComplete = (now.getTime() - startTime.getTime()) >= 7 * 24 * 60 * 60 * 1000;
+            break;
+          case '2 Weeks':
+            shouldComplete = (now.getTime() - startTime.getTime()) >= 14 * 24 * 60 * 60 * 1000;
+            break;
+        }
+        
+        if (shouldComplete) {
+          await storage.updateSimulation(simulation.id, {
+            status: 'completed',
+            endTime: now
+          });
+          console.log(`Completed simulation ${simulation.id}`);
+        }
+      }
+    } catch (error) {
+      console.error("Error in scheduled trade simulation:", error);
+    }
+  });
 
   return httpServer;
 }

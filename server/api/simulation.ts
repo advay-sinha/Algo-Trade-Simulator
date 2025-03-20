@@ -1,303 +1,371 @@
-import express from "express";
-import { SimulationEngine } from "../services/simulation-engine";
+import { Router } from "express";
 import { storage } from "../storage";
 import { z } from "zod";
-import { YahooFinanceService } from "../services/yahoo-finance";
-import { AlphaVantageService } from "../services/alpha-vantage";
+import { insertSimulationSchema, insertTradeSchema } from "@shared/schema";
+import { generateTrade } from "../utils/trade";
 
-const router = express.Router();
+const router = Router();
 
-// Initialize services
-const simulationEngine = new SimulationEngine();
-const yahooFinance = new YahooFinanceService();
-const alphaVantage = new AlphaVantageService();
+// Middleware to check if the user is authenticated
+function isAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return next();
+  }
+  res.status(401).json({ message: "Unauthorized" });
+}
 
-// Validation schemas
-const simulationConfigSchema = z.object({
-  assetType: z.enum(["stocks", "crypto", "forex"]),
-  assetName: z.string().min(1),
-  timePeriod: z.string().min(1),
-  strategy: z.string().min(1),
-  tradeAmount: z.number().min(1),
-  reinvestProfits: z.boolean(),
-});
-
-const strategyParamsSchema = z.object({
-  fastPeriod: z.number().min(1),
-  slowPeriod: z.number().min(1),
-  signalPeriod: z.number().min(1),
-  buyThreshold: z.number(),
-  sellThreshold: z.number(),
-  stopLoss: z.number().min(0),
-});
-
-// Get active simulation
-router.get("/active", async (req, res, next) => {
+// Get all strategies
+router.get("/strategies", async (req, res) => {
   try {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Unauthorized" });
+    const strategies = await storage.getStrategies();
+    res.json(strategies);
+  } catch (error) {
+    console.error("Error fetching strategies:", error);
+    res.status(500).json({ message: "Failed to fetch strategies" });
+  }
+});
+
+// Get strategy by ID
+router.get("/strategies/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Invalid strategy ID" });
     }
 
-    const userId = req.user!.id;
-    const activeSimulation = await storage.getActiveSimulation(userId);
-    
-    if (!activeSimulation) {
-      return res.json(null);
+    const strategy = await storage.getStrategy(id);
+    if (!strategy) {
+      return res.status(404).json({ message: "Strategy not found" });
     }
+
+    res.json(strategy);
+  } catch (error) {
+    console.error("Error fetching strategy:", error);
+    res.status(500).json({ message: "Failed to fetch strategy" });
+  }
+});
+
+// Get all simulations for the current user
+router.get("/simulations", isAuthenticated, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const simulations = await storage.getSimulations(userId);
     
-    // Update simulation with latest market data if it's running
-    if (activeSimulation.status === "running") {
-      const latestData = await yahooFinance.getAssetDetails(activeSimulation.assetSymbol);
+    // Augment simulations with symbol and strategy information
+    const augmentedSimulations = await Promise.all(simulations.map(async (sim) => {
+      const symbol = await storage.getSymbol(sim.symbolId);
+      const strategy = await storage.getStrategy(sim.strategyId);
       
-      if (latestData) {
-        activeSimulation.currentPrice = latestData.price;
-        
-        // Update progress based on elapsed time vs total duration
-        const startDate = new Date(activeSimulation.startedAt);
-        const endDate = new Date(activeSimulation.endTime);
-        const now = new Date();
-        
-        const totalDuration = endDate.getTime() - startDate.getTime();
-        const elapsedDuration = now.getTime() - startDate.getTime();
-        
-        activeSimulation.progress = Math.min(
-          Math.floor((elapsedDuration / totalDuration) * 100),
-          100
-        );
-      }
-    }
+      return {
+        ...sim,
+        symbol,
+        strategy
+      };
+    }));
     
-    res.json(activeSimulation);
+    res.json(augmentedSimulations);
   } catch (error) {
-    next(error);
+    console.error("Error fetching simulations:", error);
+    res.status(500).json({ message: "Failed to fetch simulations" });
   }
 });
 
-// Start a new simulation
-router.post("/start", async (req, res, next) => {
+// Get active simulations for the current user
+router.get("/simulations/active", isAuthenticated, async (req, res) => {
   try {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    const userId = req.user!.id;
+    const userId = req.user.id;
+    const simulations = await storage.getActiveSimulations(userId);
     
-    // Check if there's already an active simulation
-    const existingSimulation = await storage.getActiveSimulation(userId);
+    // Augment simulations with symbol and strategy information
+    const augmentedSimulations = await Promise.all(simulations.map(async (sim) => {
+      const symbol = await storage.getSymbol(sim.symbolId);
+      const strategy = await storage.getStrategy(sim.strategyId);
+      
+      return {
+        ...sim,
+        symbol,
+        strategy
+      };
+    }));
     
-    if (existingSimulation) {
-      return res.status(409).json({ 
-        message: "A simulation is already running. Please stop it before starting a new one." 
-      });
-    }
-    
-    // Validate input
-    const { config, params } = req.body;
-    
-    try {
-      simulationConfigSchema.parse(config);
-      strategyParamsSchema.parse(params);
-    } catch (validationError) {
-      return res.status(400).json({ 
-        message: "Invalid simulation configuration", 
-        errors: (validationError as z.ZodError).errors 
-      });
-    }
-    
-    // Get asset details for the simulation
-    let assetDetails;
-    
-    if (config.assetType === "stocks") {
-      assetDetails = await yahooFinance.getAssetDetails(config.assetName);
-    } else if (config.assetType === "crypto") {
-      assetDetails = await yahooFinance.getAssetDetails(config.assetName + "-INR");
-    } else {
-      assetDetails = await alphaVantage.getAssetDetails(config.assetName);
-    }
-    
-    if (!assetDetails) {
-      return res.status(404).json({ message: "Asset not found" });
-    }
-    
-    // Calculate simulation duration
-    const durationMs = simulationEngine.calculateDuration(config.timePeriod);
-    const endTime = new Date(Date.now() + durationMs);
-    
-    // Create the simulation
-    const simulation = await storage.createSimulation(userId, {
-      assetName: assetDetails.name,
-      assetSymbol: assetDetails.symbol,
-      assetType: config.assetType,
-      exchange: assetDetails.exchange,
-      strategy: config.strategy,
-      period: config.timePeriod,
-      tradeAmount: config.tradeAmount,
-      reinvestProfits: config.reinvestProfits,
-      startPrice: assetDetails.price,
-      currentPrice: assetDetails.price,
-      startingCapital: config.tradeAmount,
-      currentValue: config.tradeAmount,
-      status: "running",
-      progress: 0,
-      startedAt: new Date(),
-      endTime,
-      strategyParams: params
-    });
-    
-    // Start the simulation engine
-    simulationEngine.startSimulation(simulation.id, userId, {
-      config,
-      params,
-      assetDetails,
-      endTime
-    });
-    
-    res.status(201).json(simulation);
+    res.json(augmentedSimulations);
   } catch (error) {
-    next(error);
+    console.error("Error fetching active simulations:", error);
+    res.status(500).json({ message: "Failed to fetch active simulations" });
   }
 });
 
-// Pause/resume simulation
-router.post("/pause", async (req, res, next) => {
+// Get a specific simulation by ID
+router.get("/simulations/:id", isAuthenticated, async (req, res) => {
   try {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Unauthorized" });
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Invalid simulation ID" });
     }
 
-    const userId = req.user!.id;
-    
-    // Get active simulation
-    const activeSimulation = await storage.getActiveSimulation(userId);
-    
-    if (!activeSimulation) {
-      return res.status(404).json({ message: "No active simulation found" });
-    }
-    
-    // Toggle status
-    const newStatus = activeSimulation.status === "running" ? "paused" : "running";
-    
-    // Update simulation status
-    const updatedSimulation = await storage.updateSimulation(
-      activeSimulation.id,
-      { status: newStatus }
-    );
-    
-    // Pause/resume in the engine
-    if (newStatus === "paused") {
-      simulationEngine.pauseSimulation(activeSimulation.id);
-    } else {
-      simulationEngine.resumeSimulation(activeSimulation.id, userId);
-    }
-    
-    res.json(updatedSimulation);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Stop simulation
-router.post("/stop", async (req, res, next) => {
-  try {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    const userId = req.user!.id;
-    
-    // Get active simulation
-    const activeSimulation = await storage.getActiveSimulation(userId);
-    
-    if (!activeSimulation) {
-      return res.status(404).json({ message: "No active simulation found" });
-    }
-    
-    // Stop the simulation
-    simulationEngine.stopSimulation(activeSimulation.id);
-    
-    // Calculate final performance
-    const simulationTrades = await storage.getSimulationTrades(activeSimulation.id);
-    const finalPerformance = simulationEngine.calculateFinalPerformance(
-      activeSimulation,
-      simulationTrades
-    );
-    
-    // Update simulation
-    const completedSimulation = await storage.updateSimulation(
-      activeSimulation.id, 
-      {
-        status: "completed",
-        endedAt: new Date(),
-        finalValue: finalPerformance.finalValue,
-        profitLoss: finalPerformance.profitLoss,
-        profitLossPercentage: finalPerformance.profitLossPercentage,
-        successRate: finalPerformance.successRate,
-        totalTrades: finalPerformance.totalTrades
-      }
-    );
-    
-    // Save performance report
-    await storage.savePerformanceReport(activeSimulation.id, finalPerformance);
-    
-    res.json(completedSimulation);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Get simulation results
-router.get("/results/:id", async (req, res, next) => {
-  try {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    const userId = req.user!.id;
-    const { id } = req.params;
-    
-    // Get the simulation
     const simulation = await storage.getSimulation(id);
-    
     if (!simulation) {
       return res.status(404).json({ message: "Simulation not found" });
     }
-    
-    // Check if this simulation belongs to the user
-    if (simulation.userId !== userId) {
-      return res.status(403).json({ message: "Access denied" });
+
+    // Check if the simulation belongs to the current user
+    if (simulation.userId !== req.user.id) {
+      return res.status(403).json({ message: "Forbidden" });
     }
-    
-    // Get trades for this simulation
-    const trades = await storage.getSimulationTrades(id);
-    
-    // Get performance report
-    const performanceReport = await storage.getPerformanceReport(id);
+
+    // Get the symbol and strategy information
+    const symbol = await storage.getSymbol(simulation.symbolId);
+    const strategy = await storage.getStrategy(simulation.strategyId);
     
     res.json({
-      simulation,
-      trades,
-      performanceReport
+      ...simulation,
+      symbol,
+      strategy
     });
   } catch (error) {
-    next(error);
+    console.error("Error fetching simulation:", error);
+    res.status(500).json({ message: "Failed to fetch simulation" });
   }
 });
 
-// Get all completed simulations
-router.get("/history", async (req, res, next) => {
+// Create a new simulation
+router.post("/simulations", isAuthenticated, async (req, res) => {
   try {
-    if (!req.isAuthenticated()) {
-      return res.status(401).json({ message: "Unauthorized" });
+    const userId = req.user.id;
+    
+    // Add the user ID to the simulation data
+    const simulationData = {
+      ...req.body,
+      userId
+    };
+    
+    // Validate the simulation data
+    const result = insertSimulationSchema.safeParse(simulationData);
+    if (!result.success) {
+      return res.status(400).json({ message: "Invalid simulation data", errors: result.error.format() });
+    }
+    
+    // Check if the symbol exists
+    const symbol = await storage.getSymbol(result.data.symbolId);
+    if (!symbol) {
+      return res.status(404).json({ message: "Symbol not found" });
+    }
+    
+    // Check if the strategy exists
+    const strategy = await storage.getStrategy(result.data.strategyId);
+    if (!strategy) {
+      return res.status(404).json({ message: "Strategy not found" });
+    }
+    
+    // Create the simulation
+    const simulation = await storage.createSimulation(result.data);
+    
+    // Create the initial trade (BUY)
+    const marketData = await storage.getLatestMarketData(symbol.id);
+    if (marketData) {
+      const tradeData = {
+        simulationId: simulation.id,
+        type: 'buy',
+        price: marketData.close,
+        quantity: parseFloat((result.data.investment / marketData.close).toFixed(2)),
+        amount: result.data.investment,
+        status: 'completed'
+      };
+      
+      await storage.createTrade(tradeData);
+    }
+    
+    res.status(201).json({
+      ...simulation,
+      symbol,
+      strategy
+    });
+  } catch (error) {
+    console.error("Error creating simulation:", error);
+    res.status(500).json({ message: "Failed to create simulation" });
+  }
+});
+
+// Update a simulation (for completing, cancelling, etc.)
+router.patch("/simulations/:id", isAuthenticated, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Invalid simulation ID" });
     }
 
-    const userId = req.user!.id;
+    const simulation = await storage.getSimulation(id);
+    if (!simulation) {
+      return res.status(404).json({ message: "Simulation not found" });
+    }
+
+    // Check if the simulation belongs to the current user
+    if (simulation.userId !== req.user.id) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // Only allow certain fields to be updated
+    const updates = {
+      status: req.body.status,
+      endTime: req.body.status === 'completed' ? new Date() : simulation.endTime,
+      profitLoss: req.body.profitLoss,
+      profitLossPercentage: req.body.profitLossPercentage
+    };
+
+    const updatedSimulation = await storage.updateSimulation(id, updates);
+    if (!updatedSimulation) {
+      return res.status(500).json({ message: "Failed to update simulation" });
+    }
+
+    // Get the symbol and strategy information
+    const symbol = await storage.getSymbol(updatedSimulation.symbolId);
+    const strategy = await storage.getStrategy(updatedSimulation.strategyId);
     
-    // Get completed simulations
-    const completedSimulations = await storage.getCompletedSimulations(userId);
-    
-    res.json(completedSimulations);
+    res.json({
+      ...updatedSimulation,
+      symbol,
+      strategy
+    });
   } catch (error) {
-    next(error);
+    console.error("Error updating simulation:", error);
+    res.status(500).json({ message: "Failed to update simulation" });
+  }
+});
+
+// Generate a new trade for a simulation
+router.post("/simulations/:id/trade", isAuthenticated, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Invalid simulation ID" });
+    }
+
+    const simulation = await storage.getSimulation(id);
+    if (!simulation) {
+      return res.status(404).json({ message: "Simulation not found" });
+    }
+
+    // Check if the simulation belongs to the current user and is active
+    if (simulation.userId !== req.user.id) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (simulation.status !== 'active') {
+      return res.status(400).json({ message: "Cannot create trade for inactive simulation" });
+    }
+
+    // Get the current market data for the symbol
+    const marketData = await storage.getLatestMarketData(simulation.symbolId);
+    if (!marketData) {
+      return res.status(404).json({ message: "No market data available" });
+    }
+
+    // Get previous trades for this simulation
+    const previousTrades = await storage.getTrades(simulation.id);
+    
+    // Generate a new trade
+    const tradeData = generateTrade(simulation, marketData, previousTrades, req.body.type);
+    
+    // Validate the trade data
+    const result = insertTradeSchema.safeParse(tradeData);
+    if (!result.success) {
+      return res.status(400).json({ message: "Invalid trade data", errors: result.error.format() });
+    }
+    
+    // Create the trade
+    const trade = await storage.createTrade(result.data);
+    
+    // Calculate profit/loss
+    let totalInvested = 0;
+    let currentValue = 0;
+    
+    // Sum up all BUY trades
+    for (const t of [...previousTrades, trade]) {
+      if (t.type === 'buy') {
+        totalInvested += t.amount;
+      } else if (t.type === 'sell') {
+        totalInvested -= t.amount;
+      }
+    }
+    
+    // Calculate current value based on latest price
+    const totalShares = previousTrades.concat(trade).reduce((sum, t) => {
+      return t.type === 'buy' ? sum + t.quantity : sum - t.quantity;
+    }, 0);
+    
+    currentValue = totalShares * marketData.close;
+    
+    // Calculate profit/loss
+    const profitLoss = currentValue - totalInvested;
+    const profitLossPercentage = (profitLoss / totalInvested) * 100;
+    
+    // Update simulation with profit/loss
+    await storage.updateSimulation(simulation.id, {
+      profitLoss,
+      profitLossPercentage
+    });
+    
+    res.status(201).json(trade);
+  } catch (error) {
+    console.error("Error creating trade:", error);
+    res.status(500).json({ message: "Failed to create trade" });
+  }
+});
+
+// Get trades for a simulation
+router.get("/simulations/:id/trades", isAuthenticated, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: "Invalid simulation ID" });
+    }
+
+    const simulation = await storage.getSimulation(id);
+    if (!simulation) {
+      return res.status(404).json({ message: "Simulation not found" });
+    }
+
+    // Check if the simulation belongs to the current user
+    if (simulation.userId !== req.user.id) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const trades = await storage.getTrades(id);
+    res.json(trades);
+  } catch (error) {
+    console.error("Error fetching trades:", error);
+    res.status(500).json({ message: "Failed to fetch trades" });
+  }
+});
+
+// Get recent trades for the current user (across all simulations)
+router.get("/trades/recent", isAuthenticated, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const limit = parseInt(req.query.limit as string) || 10;
+    
+    const trades = await storage.getRecentTrades(userId, limit);
+    
+    // Augment trades with simulation, symbol, and strategy information
+    const augmentedTrades = await Promise.all(trades.map(async (trade) => {
+      const simulation = await storage.getSimulation(trade.simulationId);
+      const symbol = await storage.getSymbol(simulation?.symbolId || 0);
+      const strategy = await storage.getStrategy(simulation?.strategyId || 0);
+      
+      return {
+        ...trade,
+        simulation: {
+          ...simulation,
+          symbol,
+          strategy
+        }
+      };
+    }));
+    
+    res.json(augmentedTrades);
+  } catch (error) {
+    console.error("Error fetching recent trades:", error);
+    res.status(500).json({ message: "Failed to fetch recent trades" });
   }
 });
 
