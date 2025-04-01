@@ -97,7 +97,7 @@ export default function AuthPage() {
         <Card className="w-full max-w-md">
           <CardContent className="pt-6">
             <div className="text-center mb-6">
-              <h1 className="text-3xl font-bold text-primary">AlgoTrade</h1>
+              <h1 className="text-3xl font-bold text-primary text-white">AlgoTrade</h1>
               <p className="text-muted-foreground">Algorithmic Trading Simulator</p>
             </div>
 
@@ -256,13 +256,13 @@ export default function AuthPage() {
       {/* Right side: Hero */}
       <div className="flex-1 bg-primary-50 dark:bg-gray-800 p-6 flex flex-col justify-center">
         <div className="max-w-xl mx-auto">
-          <h2 className="text-3xl font-bold text-primary dark:text-primary-400 mb-6">
+          <h2 className="text-3xl font-bold text-primary dark:text-primary-400 mb-6 text-white">
             Algorithmic Trading Simulation Platform
           </h2>
           
           <div className="space-y-4 text-gray-600 dark:text-gray-300">
             <div className="flex items-start">
-              <div className="flex-shrink-0 h-10 w-10 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center">
+              <div className="flex-shrink-0 h-10 w-10 rounded-full bg-primary-100 dark:bg-primary-900 flex items-center justify-center text-white">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-primary dark:text-primary-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                 </svg>

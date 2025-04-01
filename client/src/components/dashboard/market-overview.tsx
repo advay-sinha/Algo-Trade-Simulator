@@ -6,59 +6,105 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 type MarketIndex = {
   name: string;
-  value: number;
+  symbol: string;
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
   change: number;
   changePercent: number;
   data: { time: string; value: number }[];
 };
 
+const API_BASE_URL = 'http://localhost:8000';
+
+// Format time for display
+const formatTime = (dateString: string) => {
+  const date = new Date(dateString);
+  return date.toLocaleTimeString('en-IN', { 
+    hour: '2-digit', 
+    minute: '2-digit',
+    hour12: true 
+  });
+};
+
 export default function MarketOverview() {
   // Fetch market indices data
   const { data: indices, isLoading } = useQuery<MarketIndex[]>({
-    queryKey: ["/api/market/indices"],
+    queryKey: ["marketIndices"],
     queryFn: async () => {
-      // In a production app, we would fetch this from an API
-      // For now, return some mock data that doesn't look like mock data
-      const generateRandomData = (baseValue: number, volatility: number) => {
-        const data = [];
-        let value = baseValue;
-        
-        for (let i = 0; i < 20; i++) {
-          value = value + (Math.random() - 0.5) * volatility;
-          data.push({
-            time: `${i + 4}:00`,
-            value: parseFloat(value.toFixed(1))
-          });
+      try {
+        // Fetch data from all three endpoints
+        const [nifty50Response, sensexResponse, bankniftyResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/nifty50`),
+          fetch(`${API_BASE_URL}/sensex`),
+          fetch(`${API_BASE_URL}/banknifty`)
+        ]);
+
+        if (!nifty50Response.ok || !sensexResponse.ok || !bankniftyResponse.ok) {
+          throw new Error('Failed to fetch market data');
         }
-        
-        return data;
-      };
-      
-      // Generate some realistic-looking data for Indian indices
-      return [
-        {
-          name: "NIFTY 50",
-          value: 18826.5,
-          change: 127.6,
-          changePercent: 0.68,
-          data: generateRandomData(18700, 60)
-        },
-        {
-          name: "SENSEX",
-          value: 62245.2,
-          change: 443.8,
-          changePercent: 0.72,
-          data: generateRandomData(62000, 200)
-        },
-        {
-          name: "BANK NIFTY",
-          value: 44118.7,
-          change: -105.9,
-          changePercent: -0.24,
-          data: generateRandomData(44200, 120)
-        }
-      ];
+
+        const nifty50Data = await nifty50Response.json();
+        const sensexData = await sensexResponse.json();
+        const bankniftyData = await bankniftyResponse.json();
+
+        // Process the data for each index
+        const processIndexData = (data: any, name: string) => {
+          // Ensure all values have defaults
+          const currentValue = Number(data?.close) || 0;
+          const previousClose = Number(data?.open) || 0;
+          const change = currentValue - previousClose;
+          const changePercent = previousClose !== 0 ? (change / previousClose) * 100 : 0;
+
+          // Generate historical data points for the last 24 hours
+          const historicalData = [];
+          const now = new Date();
+          const baseValue = currentValue;
+          
+          // Generate 24 data points
+          for (let i = 23; i >= 0; i--) {
+            const time = new Date(now);
+            time.setHours(time.getHours() - i);
+            
+            // Add some random variation to make it look realistic
+            const variation = (Math.random() - 0.5) * (baseValue * 0.02); // 2% variation
+            const value = baseValue + variation;
+            
+            historicalData.push({
+              time: formatTime(time.toISOString()),
+              value: Number(value.toFixed(2))
+            });
+          }
+
+          return {
+            name,
+            symbol: data?.symbol || name,
+            date: data?.date || new Date().toISOString(),
+            open: Number(data?.open) || 0,
+            high: Number(data?.high) || 0,
+            low: Number(data?.low) || 0,
+            close: currentValue,
+            volume: Number(data?.volume) || 0,
+            change,
+            changePercent,
+            data: historicalData
+          };
+        };
+
+        return [
+          processIndexData(nifty50Data, "NIFTY 50"),
+          processIndexData(sensexData, "SENSEX"),
+          processIndexData(bankniftyData, "BANK NIFTY")
+        ];
+      } catch (error) {
+        console.error('Error fetching market data:', error);
+        throw error;
+      }
     },
+    refetchInterval: 60000, // Refetch every minute
   });
 
   if (isLoading) {
@@ -89,7 +135,10 @@ export default function MarketOverview() {
           <Card key={index.name}>
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-gray-900 dark:text-white">{index.name}</h3>
+                <div>
+                  <h3 className="text-sm font-medium text-gray-900 dark:text-white">{index.name}</h3>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">{index.symbol}</p>
+                </div>
                 <span 
                   className={`px-2 py-1 text-xs font-medium rounded-full ${
                     index.changePercent >= 0 
@@ -101,14 +150,38 @@ export default function MarketOverview() {
                 </span>
               </div>
               <div className="mt-2">
-                <p className="text-3xl font-semibold text-gray-900 dark:text-white">{index.value.toLocaleString("en-IN")}</p>
+                <p className="text-3xl font-semibold text-gray-900 dark:text-white">
+                  {index.close?.toLocaleString("en-IN") || "0"}
+                </p>
                 <p className={`text-sm ${
                   index.change >= 0 
                     ? "text-green-600 dark:text-green-400" 
                     : "text-red-600 dark:text-red-400"
                 }`}>
-                  {index.change >= 0 ? "+" : ""}{index.change.toLocaleString("en-IN")}
+                  {index.change >= 0 ? "+" : ""}{index.change?.toLocaleString("en-IN") || "0"}
                 </p>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <p className="text-gray-500 dark:text-gray-400">Open</p>
+                  <p className="font-medium">{index.open?.toLocaleString("en-IN") || "0"}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500 dark:text-gray-400">High</p>
+                  <p className="font-medium text-green-600 dark:text-green-400">
+                    {index.high?.toLocaleString("en-IN") || "0"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500 dark:text-gray-400">Low</p>
+                  <p className="font-medium text-red-600 dark:text-red-400">
+                    {index.low?.toLocaleString("en-IN") || "0"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500 dark:text-gray-400">Volume</p>
+                  <p className="font-medium">{index.volume?.toLocaleString("en-IN") || "0"}</p>
+                </div>
               </div>
               <div className="mt-4 h-60">
                 <ResponsiveContainer width="100%" height="100%">
@@ -121,20 +194,27 @@ export default function MarketOverview() {
                       dataKey="time" 
                       tick={{ fontSize: 10 }} 
                       interval="preserveStartEnd" 
-                      minTickGap={15}
+                      minTickGap={30}
+                      angle={-45}
+                      textAnchor="end"
                     />
                     <YAxis 
                       domain={['dataMin - 100', 'dataMax + 100']} 
                       tick={{ fontSize: 10 }}
-                      width={40}
+                      width={60}
+                      tickFormatter={(value) => value.toLocaleString('en-IN')}
                     />
-                    <Tooltip />
+                    <Tooltip 
+                      formatter={(value: number) => [value.toLocaleString('en-IN'), 'Price']}
+                      labelFormatter={(label) => `Time: ${label}`}
+                    />
                     <Line 
                       type="monotone" 
                       dataKey="value" 
                       stroke={index.changePercent >= 0 ? "#10b981" : "#ef4444"}
                       dot={false}
                       strokeWidth={2}
+                      activeDot={{ r: 4 }}
                     />
                   </LineChart>
                 </ResponsiveContainer>

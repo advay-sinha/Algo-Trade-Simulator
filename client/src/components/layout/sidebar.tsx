@@ -73,7 +73,7 @@ export default function Sidebar({ isMobile, onClose }: SidebarProps) {
     <>
       {/* Sidebar Header */}
       <div className="flex items-center justify-between h-16 px-4">
-        <h1 className="text-2xl font-bold text-primary">AlgoTrade</h1>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">AlgoTrade</h1>
         <Button 
           variant="ghost" 
           size="icon" 
@@ -95,7 +95,7 @@ export default function Sidebar({ isMobile, onClose }: SidebarProps) {
       </div>
       
       {/* Navigation */}
-      <div className="flex-1 pt-5 px-2 space-y-1">
+      <nav className="flex-1 pt-5 px-2 space-y-1">
         {navItems.map((item) => (
           <Button
             key={item.path}
@@ -110,26 +110,26 @@ export default function Sidebar({ isMobile, onClose }: SidebarProps) {
             <span className="ml-3">{item.name}</span>
           </Button>
         ))}
-      </div>
+      </nav>
       
       {/* User Profile */}
       <div className="flex-shrink-0 p-4 border-t border-gray-200 dark:border-gray-700">
         <div className="flex items-center">
           <Avatar>
-            <AvatarFallback className="bg-primary">
+            <AvatarFallback className="bg-primary text-primary-foreground">
               {user?.name?.charAt(0).toUpperCase() || "U"}
             </AvatarFallback>
           </Avatar>
           <div className="ml-3 flex flex-col">
-            <span className="text-sm font-medium">{user?.name}</span>
+            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{user?.name}</span>
             <Button 
               variant="link" 
               size="sm" 
               className="h-auto p-0 text-xs text-primary justify-start"
               onClick={handleLogout}
             >
-              <LogOut className="h-3 w-3 mr-1" />
-              Logout
+              <LogOut className="h-3 w-3 mr-1 text-gray-900 dark:text-gray-100" />
+              <div className="text-gray-900 dark:text-gray-100">Logout</div>
             </Button>
           </div>
         </div>
@@ -141,13 +141,13 @@ export default function Sidebar({ isMobile, onClose }: SidebarProps) {
     // Mobile Sidebar
     <div className="fixed inset-0 z-40 lg:hidden">
       <div className="fixed inset-0 bg-black/50" onClick={onClose}></div>
-      <div className="relative flex flex-col min-h-0 max-w-xs w-full bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700">
+      <div className="relative flex flex-col w-64 max-w-xs h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
         {sidebarContent}
       </div>
     </div>
   ) : (
     // Desktop Sidebar
-    <div className="hidden lg:flex lg:flex-col lg:w-64 lg:min-h-screen border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+    <div className="hidden lg:flex lg:flex-col lg:w-64 lg:fixed lg:inset-y-0 lg:z-30 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
       {sidebarContent}
     </div>
   );

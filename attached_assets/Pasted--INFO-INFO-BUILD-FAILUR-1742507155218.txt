@@ -1,0 +1,59 @@
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD FAILURE
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  27.873 s
+[INFO] Finished at: 2025-03-21T03:15:17+05:30
+[INFO] ------------------------------------------------------------------------
+[ERROR] Failed to execute goal on project algorithmic-trading-app: Could not resolve dependencies for project com.trading.app:algorithmic-trading-app:jar:1.0-SNAPSHOT
+[ERROR] dependency: org.springframework:spring-context:jar:6.0.13 (compile)
+[ERROR]         Could not transfer artifact org.springframework:spring-context:jar:6.0.13 from/to central (https://repo.maven.apache.org/maven2): Connection reset
+[ERROR] dependency: org.springframework.security:spring-security-config:jar:6.1.5 (compile)
+[ERROR]         Could not transfer artifact org.springframework.security:spring-security-config:jar:6.1.5 from/to central (https://repo.maven.apache.org/maven2): Connection reset
+[ERROR] dependency: org.springframework.boot:spring-boot:jar:3.1.5 (compile)
+[ERROR]         Could not transfer artifact org.springframework.boot:spring-boot:jar:3.1.5 from/to central (https://repo.maven.apache.org/maven2): Connection reset
+[ERROR] dependency: org.springframework.boot:spring-boot-autoconfigure:jar:3.1.5 (compile)
+[ERROR]         Could not transfer artifact org.springframework.boot:spring-boot-autoconfigure:jar:3.1.5 from/to central (https://repo.maven.apache.org/maven2): Connection reset
+[ERROR] dependency: com.fasterxml.jackson.core:jackson-databind:jar:2.15.3 (compile)
+[ERROR]         Could not transfer artifact com.fasterxml.jackson.core:jackson-databind:jar:2.15.3 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR]         Could not transfer artifact com.fasterxml.jackson.core:jackson-databind:jar:2.15.3 from/to bintray-jwtk-coveralls-maven-plugin (https://dl.bintray.com/jwtk/coveralls-maven-plugin): Permission denied: getsockopt
+[ERROR] dependency: com.fasterxml.jackson.core:jackson-annotations:jar:2.15.3 (compile)
+[ERROR]         Could not transfer artifact com.fasterxml.jackson.core:jackson-annotations:jar:2.15.3 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR]         Could not transfer artifact com.fasterxml.jackson.core:jackson-annotations:jar:2.15.3 from/to bintray-jwtk-coveralls-maven-plugin (https://dl.bintray.com/jwtk/coveralls-maven-plugin): Permission denied: getsockopt
+[ERROR] dependency: com.fasterxml.jackson.core:jackson-core:jar:2.15.3 (compile)
+[ERROR]         Could not transfer artifact com.fasterxml.jackson.core:jackson-core:jar:2.15.3 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR]         Could not transfer artifact com.fasterxml.jackson.core:jackson-core:jar:2.15.3 from/to bintray-jwtk-coveralls-maven-plugin (https://dl.bintray.com/jwtk/coveralls-maven-plugin): Permission denied: getsockopt
+[ERROR] dependency: com.squareup.okhttp3:okhttp:jar:4.9.3 (compile)     
+[ERROR]         Could not transfer artifact com.squareup.okhttp3:okhttp:jar:4.9.3 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: com.squareup.okio:okio:jar:2.8.0 (compile)
+[ERROR]         Could not transfer artifact com.squareup.okio:okio:jar:2.8.0 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.8.22 (compile)
+[ERROR]         Could not transfer artifact org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.8.22 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.jetbrains.kotlin:kotlin-stdlib:jar:1.8.22 (compile)
+[ERROR]         Could not transfer artifact org.jetbrains.kotlin:kotlin-stdlib:jar:1.8.22 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.jetbrains:annotations:jar:13.0 (compile)        
+[ERROR]         Could not transfer artifact org.jetbrains:annotations:jar:13.0 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.projectlombok:lombok:jar:1.18.30 (compile?)     
+[ERROR]         Could not transfer artifact org.projectlombok:lombok:jar:1.18.30 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.springframework.boot:spring-boot-starter-validation:jar:3.1.5 (compile)
+[ERROR]         Could not transfer artifact org.springframework.boot:spring-boot-starter-validation:jar:3.1.5 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.apache.tomcat.embed:tomcat-embed-el:jar:10.1.15 (compile)
+[ERROR]         Could not transfer artifact org.apache.tomcat.embed:tomcat-embed-el:jar:10.1.15 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.hibernate.validator:hibernate-validator:jar:8.0.1.Final (compile)
+[ERROR]         Could not transfer artifact org.hibernate.validator:hibernate-validator:jar:8.0.1.Final from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: jakarta.validation:jakarta.validation-api:jar:3.0.2 (compile)
+[ERROR]         Could not transfer artifact jakarta.validation:jakarta.validation-api:jar:3.0.2 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.jboss.logging:jboss-logging:jar:3.5.3.Final (compile)
+[ERROR]         Could not transfer artifact org.jboss.logging:jboss-logging:jar:3.5.3.Final from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.springframework.boot:spring-boot-starter-test:jar:3.1.5 (test)
+[ERROR]         Could not transfer artifact org.springframework.boot:spring-boot-starter-test:jar:3.1.5 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.springframework.boot:spring-boot-test:jar:3.1.5 (test)
+[ERROR]         Could not transfer artifact org.springframework.boot:spring-boot-test:jar:3.1.5 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: org.springframework.boot:spring-boot-test-autoconfigure:jar:3.1.5 (test)
+[ERROR]         Could not transfer artifact org.springframework.boot:spring-boot-test-autoconfigure:jar:3.1.5 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: com.jayway.jsonpath:json-path:jar:2.8.0 (test)      
+[ERROR]         Could not transfer artifact com.jayway.jsonpath:json-path:jar:2.8.0 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: jakarta.xml.bind:jakarta.xml.bind-api:jar:4.0.1 (test)
+[ERROR]         Could not transfer artifact jakarta.xml.bind:jakarta.xml.bind-api:jar:4.0.1 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: jakarta.activation:jakarta.activation-api:jar:2.1.2 (test)
+[ERROR]         Could not transfer artifact jakarta.activation:jakarta.activation-api:jar:2.1.2 from/to central (https://repo.maven.apache.org/maven2): Permission denied: getsockopt
+[ERROR] dependency: net.minidev:json-smart:jar:2.

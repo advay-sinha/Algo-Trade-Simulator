@@ -410,14 +410,14 @@ export default function StrategyForm({
                 type="button"
                 variant="ghost"
                 onClick={() => setShowAdvanced(!showAdvanced)}
-                className="flex items-center text-sm text-primary hover:text-primary/80 p-0"
+                className="flex items-center text-sm text-primary hover:text-primary/80 p-0 text-black dark:text-gray-200 p-4"
               >
                 {showAdvanced ? (
-                  <ChevronDown className="mr-2 h-4 w-4" />
+                  <ChevronDown className="mr-2 h-4 w-4 text-black dark:text-gray-200" />
                 ) : (
-                  <ChevronRight className="mr-2 h-4 w-4" />
+                  <ChevronRight className="mr-2 h-4 w-4 text-black dark:text-gray-200" />
                 )}
-                Advanced Settings
+                <div className="text-black dark:text-gray-200">Advanced Settings</div>
               </Button>
               
               {showAdvanced && (

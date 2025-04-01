@@ -9,6 +9,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
+  server: {
+    hmr: false, // Disable HMR completely
+    // Alternatively, configure it properly:
+    // hmr: {
+    //   protocol: 'ws',
+    //   host: 'localhost',
+    //   port: 5000
+    // }
+  },
   plugins: [
     react(),
     runtimeErrorOverlay(),

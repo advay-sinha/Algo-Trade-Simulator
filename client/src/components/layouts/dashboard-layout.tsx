@@ -14,6 +14,7 @@ const mainNavItems: NavItem[] = [
   { name: "Dashboard", path: "/", icon: "ri-dashboard-line" },
   { name: "Market Data", path: "/market", icon: "ri-line-chart-line" },
   { name: "Simulation", path: "/simulation", icon: "ri-robot-line" },
+  { name: "Trading", path: "/trading", icon: "ri-exchange-line" },
   { name: "Trade History", path: "/history", icon: "ri-history-line" },
   { name: "Reports", path: "/reports", icon: "ri-bar-chart-2-line" },
 ];
@@ -27,6 +28,7 @@ const pageNames: Record<string, string> = {
   "/": "Dashboard",
   "/market": "Market Data",
   "/simulation": "Simulation",
+  "/trading": "Trading",
   "/history": "Trade History",
   "/reports": "Performance Reports",
   "/profile": "User Profile",
@@ -59,11 +61,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       >
         <div className="h-full flex flex-col">
           {/* Logo */}
-          <div className="flex items-center h-16 px-6 border-b border-gray-800">
+          <div className="flex items-center justify-between h-16 px-6 border-b border-gray-800">
             <h1 className="text-xl font-bold">AlgoTrade</h1>
             {isMobile && (
               <button 
-                className="ml-auto text-gray-400 hover:text-white"
+                className="text-gray-400 hover:text-white"
                 onClick={toggleSidebar}
               >
                 <i className="ri-close-line text-xl"></i>
@@ -143,18 +145,23 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
+      {/* Overlay when mobile sidebar is open */}
+      {isMobile && sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-gray-600 bg-opacity-75 z-40"
+          onClick={toggleSidebar}
+        ></div>
+      )}
+
       {/* Mobile Sidebar Toggle Button */}
-      {isMobile && (
-        <div className="absolute top-4 left-4 z-40">
-          <Button
-            variant="default"
-            className="p-2 rounded-md bg-primary text-white shadow-md"
-            onClick={toggleSidebar}
-            aria-label="Open menu"
-          >
-            <i className="ri-menu-line text-lg"></i>
-          </Button>
-        </div>
+      {isMobile && !sidebarOpen && (
+        <button
+          className="fixed top-4 left-4 z-40 p-2 rounded-md bg-primary text-white shadow-md"
+          onClick={toggleSidebar}
+          aria-label="Open menu"
+        >
+          <i className="ri-menu-line text-lg"></i>
+        </button>
       )}
       
       {/* Main Content Area */}
@@ -162,7 +169,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         {/* Header */}
         <header className="bg-white shadow-sm z-10">
           <div className="flex justify-between items-center py-4 px-6">
-            <div>
+            <div className={isMobile ? "ml-10" : ""}>
               <h1 className="text-2xl font-semibold text-gray-800">{pageName}</h1>
             </div>
             <div className="flex items-center space-x-4">
@@ -175,7 +182,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               </div>
               
               {/* Search */}
-              <div className="relative">
+              <div className="relative hidden sm:block">
                 <input 
                   type="text" 
                   placeholder="Search stocks or crypto..." 

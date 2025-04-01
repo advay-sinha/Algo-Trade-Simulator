@@ -4,16 +4,35 @@ import { Express } from "express";
 import session from "express-session";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
-import { storage } from "./storage";
-import { User as SelectUser } from "@shared/schema";
 import { z } from "zod";
 import { insertUserSchema } from "@shared/schema";
+import mongoose from "mongoose";
+import MongoStore from "connect-mongo";
 
+// Define User interface
 declare global {
   namespace Express {
-    interface User extends SelectUser {}
+    interface User {
+      _id: string;
+      username: string;
+      name: string;
+      email: string;
+      password: string;
+    }
   }
 }
+
+// Create MongoDB User Schema
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true },
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+
+// Create User model
+const UserModel = mongoose.model<Express.User & mongoose.Document>("User", userSchema);
 
 const scryptAsync = promisify(scrypt);
 
@@ -30,6 +49,26 @@ async function comparePasswords(supplied: string, stored: string) {
   return timingSafeEqual(hashedBuf, suppliedBuf);
 }
 
+// MongoDB User data access methods
+const mongoStorage = {
+  async getUserByUsername(username: string) {
+    return UserModel.findOne({ username }).lean();
+  },
+  
+  async getUserByEmail(email: string) {
+    return UserModel.findOne({ email }).lean();
+  },
+  
+  async getUser(id: string) {
+    return UserModel.findById(id).lean();
+  },
+  
+  async createUser(userData: { username: string; password: string; name: string; email: string }) {
+    const newUser = new UserModel(userData);
+    return newUser.save();
+  }
+};
+
 const registerSchema = insertUserSchema.extend({
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
@@ -38,14 +77,24 @@ const registerSchema = insertUserSchema.extend({
 });
 
 export function setupAuth(app: Express) {
+  // Connect to MongoDB
+  const mongoUri = process.env.MONGODB_URI || 'mongodb+srv://advaysinhaa:dLwVx1rqDPSSgrtg@algotrade.9mloe.mongodb.net/algotrade';
+  mongoose.connect(mongoUri)
+    .then(() => console.log('Connected to MongoDB'))
+    .catch(err => console.error('MongoDB connection error:', err));
+  
   const isDev = app.get("env") === "development";
   const sessionSecret = process.env.SESSION_SECRET || "algo-trade-secret-key";
 
+  // Configure session with MongoDB as store
   const sessionSettings: session.SessionOptions = {
     secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
-    store: storage.sessionStore,
+    store: MongoStore.create({ 
+      mongoUrl: mongoUri,
+      collectionName: 'sessions'
+    }),
     cookie: {
       secure: !isDev,
       maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
@@ -60,10 +109,11 @@ export function setupAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
+  // Configure LocalStrategy with MongoDB
   passport.use(
     new LocalStrategy(async (username, password, done) => {
       try {
-        const user = await storage.getUserByUsername(username);
+        const user = await mongoStorage.getUserByUsername(username);
         if (!user || !(await comparePasswords(password, user.password))) {
           return done(null, false);
         } else {
@@ -75,16 +125,19 @@ export function setupAuth(app: Express) {
     }),
   );
 
-  passport.serializeUser((user, done) => done(null, user.id));
-  passport.deserializeUser(async (id: number, done) => {
+  // Serialize/deserialize user with MongoDB ObjectId
+  passport.serializeUser((user, done) => done(null, user._id));
+  
+  passport.deserializeUser(async (id: string, done) => {
     try {
-      const user = await storage.getUser(id);
+      const user = await mongoStorage.getUser(id);
       done(null, user);
     } catch (error) {
       done(error);
     }
   });
 
+  // Registration endpoint
   app.post("/api/register", async (req, res, next) => {
     try {
       const result = registerSchema.safeParse(req.body);
@@ -95,8 +148,8 @@ export function setupAuth(app: Express) {
       const { username, password, name, email } = result.data;
 
       // Check if username or email already exists
-      const existingUser = await storage.getUserByUsername(username);
-      const existingEmail = await storage.getUserByEmail(email);
+      const existingUser = await mongoStorage.getUserByUsername(username);
+      const existingEmail = await mongoStorage.getUserByEmail(email);
 
       if (existingUser) {
         return res.status(400).json({ message: "Username already exists" });
@@ -108,7 +161,7 @@ export function setupAuth(app: Express) {
 
       const hashedPassword = await hashPassword(password);
 
-      const user = await storage.createUser({
+      const user = await mongoStorage.createUser({
         username,
         password: hashedPassword,
         name,
@@ -116,9 +169,10 @@ export function setupAuth(app: Express) {
       });
 
       // Remove password from response
-      const { password: _, ...userWithoutPassword } = user;
+      const userObject = user.toObject();
+      const { password: _, ...userWithoutPassword } = userObject;
 
-      req.login(user, (err) => {
+      req.login(userObject, (err) => {
         if (err) return next(err);
         res.status(201).json(userWithoutPassword);
       });
@@ -127,6 +181,7 @@ export function setupAuth(app: Express) {
     }
   });
 
+  // Login endpoint
   app.post("/api/login", (req, res, next) => {
     passport.authenticate("local", (err, user, info) => {
       if (err) return next(err);
@@ -143,6 +198,7 @@ export function setupAuth(app: Express) {
     })(req, res, next);
   });
 
+  // Logout endpoint
   app.post("/api/logout", (req, res, next) => {
     req.logout((err) => {
       if (err) return next(err);
@@ -150,6 +206,7 @@ export function setupAuth(app: Express) {
     });
   });
 
+  // Get current user endpoint
   app.get("/api/user", (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
     

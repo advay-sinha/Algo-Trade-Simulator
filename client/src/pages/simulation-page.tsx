@@ -7,6 +7,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import type { Simulation } from "@shared/schema";
 
 export type SimulationConfig = {
   assetType: string;
@@ -37,8 +38,46 @@ export default function SimulationPage() {
   // Start simulation mutation
   const startSimulationMutation = useMutation({
     mutationFn: async (data: { config: SimulationConfig, params: StrategyParams }) => {
-      const res = await apiRequest("POST", "/api/simulation/start", data);
-      return await res.json();
+      try {
+        // First, get the symbol ID for the selected asset
+        const symbolResponse = await apiRequest("GET", `/api/symbols/${data.config.assetName.toUpperCase()}`);
+        if (!symbolResponse.ok) {
+          throw new Error(`Failed to fetch symbol: ${symbolResponse.statusText}`);
+        }
+        const symbolData = await symbolResponse.json();
+        
+        if (!symbolData || !symbolData.id) {
+          throw new Error("Symbol not found");
+        }
+
+        // Create the simulation with the correct symbol ID
+        const simulationData = {
+          userId: "1",
+          symbolId: symbolData.id.toString(),
+          strategyId: "1",
+          initialInvestment: data.config.tradeAmount,
+          currentBalance: data.config.tradeAmount,
+          parameters: {
+            ...data.params,
+            reinvestProfits: data.config.reinvestProfits
+          },
+          timeperiod: data.config.timePeriod,
+          interval: "1h",
+          profitLoss: 0,
+          profitLossPercentage: 0,
+          totalTrades: 0,
+          successfulTrades: 0
+        };
+
+        const res = await apiRequest("POST", "/api/simulation/simulations", simulationData);
+        if (!res.ok) {
+          throw new Error(`Failed to create simulation: ${res.statusText}`);
+        }
+        return await res.json();
+      } catch (error) {
+        console.error("Error in simulation creation:", error);
+        throw error;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/simulation/active"] });
@@ -103,7 +142,7 @@ export default function SimulationPage() {
   // Default simulation config and strategy params
   const [simulationConfig, setSimulationConfig] = useState<SimulationConfig>({
     assetType: "stocks",
-    assetName: "reliance",
+    assetName: "RELIANCE",
     timePeriod: "24h",
     strategy: "macd",
     tradeAmount: 10000,
@@ -160,30 +199,28 @@ export default function SimulationPage() {
   };
 
   const hasActiveSimulation = activeSimulation && !simulationLoading;
+  const isDisabled = Boolean(hasActiveSimulation || startSimulationMutation.isPending);
 
   return (
     <DashboardLayout>
-      {/* Simulation Setup */}
       <SimulationSetup
         config={simulationConfig}
         onChange={handleSetupChange}
         onStart={handleStartSimulation}
-        disabled={hasActiveSimulation || startSimulationMutation.isPending}
+        disabled={isDisabled}
         isLoading={startSimulationMutation.isPending}
       />
       
-      {/* Strategy Parameters */}
       <StrategyParameters
         params={strategyParams}
         onChange={handleParamsChange}
         onReset={handleResetParams}
-        disabled={hasActiveSimulation || startSimulationMutation.isPending}
+        disabled={isDisabled}
       />
       
-      {/* Active Simulation */}
       {(hasActiveSimulation || simulationLoading) && (
         <ActiveSimulation
-          simulation={activeSimulation}
+          simulation={activeSimulation as Simulation}
           isLoading={simulationLoading}
           onPause={handlePauseSimulation}
           onStop={handleStopSimulation}
