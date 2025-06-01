@@ -2,7 +2,7 @@
 
 A comprehensive algorithmic trading simulator that allows users to practice trading strategies with live market data in a risk-free environment.
 
-![Algo Trade Simulator]
+[Algo Trade Simulator]
 
 ## Features
 
