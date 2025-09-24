@@ -1,7 +1,0 @@
-fastapi>=0.95.0
-uvicorn>=0.22.0
-httpx>=0.24.0
-pydantic>=1.10.7
-yfinance>=0.2.18
-pandas>=1.5
-python-dotenv>=1.0.0
