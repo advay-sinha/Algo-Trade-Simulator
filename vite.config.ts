@@ -1,45 +1,25 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import themePlugin from "@replit/vite-plugin-shadcn-theme-json";
-import path, { dirname } from "path";
-import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
-import { fileURLToPath } from "url";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
-  server: {
-    hmr: false, // Disable HMR completely
-    // Alternatively, configure it properly:
-    // hmr: {
-    //   protocol: 'ws',
-    //   host: 'localhost',
-    //   port: 5000
-    // }
-  },
-  plugins: [
-    react(),
-    runtimeErrorOverlay(),
-    themePlugin(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
-        ]
-      : []),
-  ],
+  root: resolve(__dirname, "client"),
+  plugins: [react()],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "client", "src"),
-      "@shared": path.resolve(__dirname, "shared"),
+      "@": resolve(__dirname, "client", "src"),
     },
   },
-  root: path.resolve(__dirname, "client"),
+  server: {
+    port: 5173,
+    strictPort: true,
+  },
   build: {
-    outDir: path.resolve(__dirname, "dist/public"),
+    outDir: resolve(__dirname, "dist"),
     emptyOutDir: true,
   },
 });
