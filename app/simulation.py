@@ -1,15 +1,20 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict
-import yfinance as yf
+from typing import Dict, List
 import uuid
 from datetime import datetime, timedelta
-import pandas as pd
 from fastapi import APIRouter
 import asyncio
 import json
 import random
+
+from yahoo_service import (
+    YahooFinanceError,
+    get_bulk_price_snapshots,
+    get_price_history,
+    search_symbol,
+)
 
 app5_router = APIRouter()
 
@@ -21,9 +26,9 @@ ACCOUNT = {
     "currency": "INR",
 }
 
-PORTFOLIO = []
-TRADES = []
-STOCKS_CACHE = {}
+PORTFOLIO: List[Dict] = []
+TRADES: List[Dict] = []
+STOCKS_CACHE: List[Dict] = []
 STOCKS_CACHE_TIME = None
 
 # WebSocket connection manager
@@ -189,56 +194,35 @@ async def websocket_endpoint(websocket: WebSocket):
 # Helper function to fetch stock data from yfinance
 def fetch_stock_data(symbols):
     stock_data = []
-    
-    # Define Indian stock tickers (NSE format)
+
     if not symbols:
         symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "BHARTIARTL.NS"]
-    
-    # Append .NS to symbols if not already present
-    formatted_symbols = [s if ".NS" in s else f"{s}.NS" for s in symbols]
-    
+
+    formatted_symbols = [s if s.endswith(".NS") else f"{s}.NS" for s in symbols]
+
     try:
-        # Fetch data for all symbols at once
-        data = yf.download(formatted_symbols, period="2d")
-        
-        # Process each stock
-        for symbol in formatted_symbols:
-            try:
-                plain_symbol = symbol.replace(".NS", "")
-                
-                # Get current price
-                if len(formatted_symbols) == 1:
-                    current_price = data["Close"][-1]
-                    prev_price = data["Close"][-2]
-                else:
-                    current_price = data["Close"][symbol][-1]
-                    prev_price = data["Close"][symbol][-2]
-                
-                price_change = current_price - prev_price
-                percent_change = (price_change / prev_price) * 100
-                
-                # Get company name (sometimes this might fail if yfinance can't fetch the data)
-                try:
-                    ticker = yf.Ticker(symbol)
-                    company_name = ticker.info.get("longName", plain_symbol)
-                except:
-                    company_name = plain_symbol
-                
-                stock_data.append({
-                    "id": plain_symbol,
-                    "symbol": plain_symbol,
-                    "name": company_name,
-                    "currentPrice": round(current_price, 2),
-                    "change": round(price_change, 2),
-                    "changePercent": round(percent_change, 2),
-                })
-            except Exception as e:
-                print(f"Error processing {symbol}: {e}")
-                continue
-                
-    except Exception as e:
-        print(f"Error fetching stock data: {e}")
-        
+        snapshots = get_bulk_price_snapshots(formatted_symbols)
+    except YahooFinanceError as exc:
+        print(f"Error fetching stock data: {exc}")
+        return stock_data
+
+    for snapshot in snapshots:
+        plain_symbol = snapshot.symbol.replace(".NS", "")
+        try:
+            profile = search_symbol(snapshot.symbol)
+            company_name = profile.get("name", plain_symbol)
+        except YahooFinanceError:
+            company_name = plain_symbol
+
+        stock_data.append({
+            "id": plain_symbol,
+            "symbol": plain_symbol,
+            "name": company_name,
+            "currentPrice": round(snapshot.price, 2),
+            "change": round(snapshot.change, 2),
+            "changePercent": round(snapshot.change_percent, 2),
+        })
+
     return stock_data
 
 # GET /account
@@ -399,28 +383,24 @@ async def get_stock_history(symbol: str, period: str = "1d", interval: str = "1m
         if not symbol.endswith(".NS"):
             symbol = f"{symbol}.NS"
             
-        # Fetch historical data
-        data = yf.download(symbol, period=period, interval=interval)
-        
-        if data.empty:
-            raise HTTPException(status_code=404, detail="No data found for the symbol")
-            
-        # Format the data for the response
+        history = get_price_history(symbol, period=period, interval=interval)
+
         formatted_data = []
-        for timestamp, row in data.iterrows():
+        for entry in history:
+            timestamp = datetime.fromisoformat(entry["timestamp"])
             formatted_data.append({
                 "time": timestamp.strftime("%H:%M"),
-                "price": round(row["Close"], 2),
-                "open": round(row["Open"], 2),
-                "high": round(row["High"], 2),
-                "low": round(row["Low"], 2),
-                "volume": int(row["Volume"])
+                "price": round(entry["price"], 2),
+                "open": round(entry["open"], 2),
+                "high": round(entry["high"], 2),
+                "low": round(entry["low"], 2),
+                "volume": int(entry["volume"])
             })
-            
+
         return formatted_data
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching data: {str(e)}")
+
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=500, detail=f"Error fetching data: {str(exc)}")
 
 # Root endpoint
 @app5_router.get("/")

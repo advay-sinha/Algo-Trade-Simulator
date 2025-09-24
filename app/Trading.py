@@ -1,117 +1,119 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-import yfinance as yf
-from typing import List, Optional, Dict
-from pydantic import BaseModel
-from datetime import datetime
-import pandas as pd
-import numpy as np
-import asyncio
-import json
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
-import logging
-from fastapi import APIRouter
+"""FastAPI routes that expose real-time and historical market data."""
+from __future__ import annotations
 
-# Set up logging
+import asyncio
+import logging
+from datetime import datetime
+from typing import Dict, List
+
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+
+from yahoo_service import (
+    YahooFinanceError,
+    get_company_profile,
+    get_earnings_history,
+    get_index_quote,
+    get_major_holders,
+    get_news_items,
+    get_price_history,
+    get_price_snapshot,
+    get_technical_indicators,
+    search_symbol,
+)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app4_router = APIRouter()
 
-# Store active WebSocket connections
-active_connections: Dict[str, List[WebSocket]] = {}
 
 class ConnectionManager:
-    def __init__(self):
+    """Tracks active WebSocket connections per stock symbol."""
+
+    def __init__(self) -> None:
         self.active_connections: Dict[str, List[WebSocket]] = {}
         self.connection_tasks: Dict[str, asyncio.Task] = {}
 
-    async def connect(self, websocket: WebSocket, symbol: str):
+    async def connect(self, websocket: WebSocket, symbol: str) -> None:
         await websocket.accept()
+        self.active_connections.setdefault(symbol, []).append(websocket)
+
+    def disconnect(self, websocket: WebSocket, symbol: str) -> None:
         if symbol not in self.active_connections:
-            self.active_connections[symbol] = []
-        self.active_connections[symbol].append(websocket)
+            return
+        connections = self.active_connections[symbol]
+        if websocket in connections:
+            connections.remove(websocket)
+        if not connections:
+            self.active_connections.pop(symbol, None)
+            task = self.connection_tasks.pop(symbol, None)
+            if task:
+                task.cancel()
 
-    def disconnect(self, websocket: WebSocket, symbol: str):
-        if symbol in self.active_connections:
-            self.active_connections[symbol].remove(websocket)
-            if not self.active_connections[symbol]:
-                del self.active_connections[symbol]
-                if symbol in self.connection_tasks:
-                    self.connection_tasks[symbol].cancel()
-                    del self.connection_tasks[symbol]
+    async def broadcast(self, symbol: str, message: Dict) -> None:
+        if symbol not in self.active_connections:
+            return
 
-    async def broadcast(self, symbol: str, message: dict):
-        if symbol in self.active_connections:
-            dead_connections = []
-            for connection in self.active_connections[symbol]:
-                try:
-                    await connection.send_json(message)
-                except Exception as e:
-                    logger.error(f"Error sending message to WebSocket: {str(e)}")
-                    dead_connections.append(connection)
-            
-            # Remove dead connections
-            for connection in dead_connections:
-                self.disconnect(connection, symbol)
+        dead_connections: List[WebSocket] = []
+        for connection in self.active_connections[symbol]:
+            try:
+                await connection.send_json(message)
+            except Exception as exc:  # pragma: no cover - network error
+                logger.error("Error sending message to WebSocket: %s", exc)
+                dead_connections.append(connection)
 
-    async def start_stock_updates(self, symbol: str):
+        for connection in dead_connections:
+            self.disconnect(connection, symbol)
+
+    async def start_stock_updates(self, symbol: str) -> None:
         if symbol in self.connection_tasks:
             return
-            
-        async def update_stock_data():
+
+        async def update_stock_data() -> None:
             while True:
                 try:
                     if symbol not in self.active_connections:
                         break
-                        
-                    stock = yf.Ticker(symbol)
-                    info = stock.info
-                    
-                    if not info or not isinstance(info, dict):
-                        await self.broadcast(symbol, {
-                            "error": "Invalid stock data received",
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        await asyncio.sleep(5)
-                        continue
-                    
-                    if not info.get('regularMarketPrice'):
-                        await self.broadcast(symbol, {
+
+                    snapshot = get_price_snapshot(symbol)
+                    await self.broadcast(
+                        symbol,
+                        {
+                            "price": snapshot.price,
+                            "change": snapshot.change,
+                            "change_percent": snapshot.change_percent,
+                            "volume": snapshot.volume,
+                            "timestamp": snapshot.timestamp.isoformat(),
+                        },
+                    )
+                    await asyncio.sleep(5)
+                except YahooFinanceError as exc:
+                    logger.error("Yahoo Finance error for %s: %s", symbol, exc)
+                    await self.broadcast(
+                        symbol,
+                        {
                             "error": "Unable to fetch stock data",
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        await asyncio.sleep(5)
-                        continue
-                    
-                    current_price = info.get('regularMarketPrice', 0)
-                    previous_close = info.get('previousClose', 0)
-                    change = current_price - previous_close
-                    change_percent = (change / previous_close) * 100 if previous_close else 0
-                    
-                    data = {
-                        "price": current_price,
-                        "change": change,
-                        "change_percent": change_percent,
-                        "volume": info.get('regularMarketVolume', 0),
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    
-                    await self.broadcast(symbol, data)
+                            "timestamp": datetime.utcnow().isoformat(),
+                        },
+                    )
                     await asyncio.sleep(5)
-                    
-                except Exception as e:
-                    logger.error(f"Error in WebSocket update for {symbol}: {str(e)}")
-                    await self.broadcast(symbol, {
-                        "error": "Error updating stock data",
-                        "timestamp": datetime.now().isoformat()
-                    })
+                except Exception as exc:  # pragma: no cover - defensive catch
+                    logger.error("Error in WebSocket update for %s: %s", symbol, exc)
+                    await self.broadcast(
+                        symbol,
+                        {
+                            "error": "Error updating stock data",
+                            "timestamp": datetime.utcnow().isoformat(),
+                        },
+                    )
                     await asyncio.sleep(5)
-        
+
         self.connection_tasks[symbol] = asyncio.create_task(update_stock_data())
 
+
 manager = ConnectionManager()
+
 
 class StockData(BaseModel):
     symbol: str
@@ -120,6 +122,7 @@ class StockData(BaseModel):
     change_percent: float
     volume: int
     timestamp: datetime
+
 
 class TechnicalIndicators(BaseModel):
     symbol: str
@@ -130,6 +133,7 @@ class TechnicalIndicators(BaseModel):
     sma_20: float
     sma_50: float
     timestamp: datetime
+
 
 class CompanyInfo(BaseModel):
     symbol: str
@@ -143,6 +147,7 @@ class CompanyInfo(BaseModel):
     fifty_two_week_high: float
     fifty_two_week_low: float
 
+
 class NewsItem(BaseModel):
     title: str
     summary: str
@@ -150,318 +155,187 @@ class NewsItem(BaseModel):
     timestamp: datetime
     url: str
 
+
 def validate_stock_symbol(symbol: str) -> bool:
-    """Validate if the stock symbol exists and is accessible"""
     try:
-        stock = yf.Ticker(symbol)
-        info = stock.info
-        return bool(info.get('regularMarketPrice'))
-    except Exception as e:
-        logger.error(f"Error validating symbol {symbol}: {str(e)}")
+        get_price_snapshot(symbol)
+        return True
+    except YahooFinanceError:
         return False
 
-# Define a function to fetch data from Yahoo Finance
-def get_index_data(ticker: str) -> Dict:
-    try:
-        # Fetch data for the provided ticker symbol
-        data = yf.Ticker(ticker)
-        hist = data.history(period="1d")  # Fetch 1-day historical data
-        
-        if hist.empty:
-            raise HTTPException(status_code=404, detail="Data not found")
-        
-        latest_data = hist.iloc[-1]
-        
-        return {
-            "symbol": ticker,
-            "date": latest_data.name.strftime("%Y-%m-%d %H:%M:%S"),
-            "open": latest_data["Open"],
-            "high": latest_data["High"],
-            "low": latest_data["Low"],
-            "close": latest_data["Close"],
-            "volume": latest_data["Volume"],
-        }
-    except Exception as e:
-        logger.error(f"Error fetching data for {ticker}: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-    
+
 @app4_router.websocket("/ws/{symbol}")
-async def websocket_endpoint(websocket: WebSocket, symbol: str):
+async def websocket_endpoint(websocket: WebSocket, symbol: str) -> None:
     if not validate_stock_symbol(symbol):
         await websocket.close(code=4004, reason=f"Invalid stock symbol: {symbol}")
         return
-        
+
     await manager.connect(websocket, symbol)
     await manager.start_stock_updates(symbol)
-    
+
     try:
         while True:
             try:
-                # Keep the connection alive
                 await websocket.receive_text()
             except WebSocketDisconnect:
                 break
-            except Exception as e:
-                logger.error(f"Error in WebSocket connection for {symbol}: {str(e)}")
+            except Exception:
                 break
     finally:
         manager.disconnect(websocket, symbol)
 
+
 @app4_router.get("/")
-async def root():
+async def root() -> Dict[str, str]:
     return {"message": "Welcome to Stock Trading API"}
 
+
 @app4_router.get("/stock/{symbol}", response_model=StockData)
-async def get_stock_data(symbol: str):
+async def get_stock_data(symbol: str) -> StockData:
     try:
-        if not validate_stock_symbol(symbol):
-            raise HTTPException(status_code=404, detail=f"Invalid or unavailable stock symbol: {symbol}")
-        
-        stock = yf.Ticker(symbol)
-        info = stock.info
-        
-        current_price = info.get('regularMarketPrice', 0)
-        previous_close = info.get('previousClose', 0)
-        change = current_price - previous_close
-        change_percent = (change / previous_close) * 100 if previous_close else 0
-        
+        snapshot = get_price_snapshot(symbol)
         return StockData(
-            symbol=symbol,
-            price=current_price,
-            change=change,
-            change_percent=change_percent,
-            volume=info.get('regularMarketVolume', 0),
-            timestamp=datetime.now()
+            symbol=snapshot.symbol,
+            price=snapshot.price,
+            change=snapshot.change,
+            change_percent=snapshot.change_percent,
+            volume=snapshot.volume,
+            timestamp=snapshot.timestamp,
         )
-    except Exception as e:
-        logger.error(f"Error fetching stock data for {symbol}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching data for {symbol}: {str(e)}")
+    except YahooFinanceError as exc:
+        logger.error("Error fetching stock data for %s: %s", symbol, exc)
+        raise HTTPException(status_code=500, detail=f"Error fetching data for {symbol}: {exc}")
+
 
 @app4_router.get("/stock/{symbol}/technical", response_model=TechnicalIndicators)
-async def get_technical_indicators(symbol: str):
+async def get_technical_indicators_endpoint(symbol: str) -> TechnicalIndicators:
     try:
-        stock = yf.Ticker(symbol)
-        hist = stock.history(period="1y")
-        
-        # Calculate RSI
-        delta = hist['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-        
-        # Calculate MACD
-        exp1 = hist['Close'].ewm(span=12, adjust=False).mean()
-        exp2 = hist['Close'].ewm(span=26, adjust=False).mean()
-        macd = exp1 - exp2
-        signal = macd.ewm(span=9, adjust=False).mean()
-        hist_macd = macd - signal
-        
-        # Calculate SMAs
-        sma_20 = hist['Close'].rolling(window=20).mean()
-        sma_50 = hist['Close'].rolling(window=50).mean()
-        
+        indicators = get_technical_indicators(symbol)
         return TechnicalIndicators(
             symbol=symbol,
-            rsi=float(rsi.iloc[-1]),
-            macd=float(macd.iloc[-1]),
-            macd_signal=float(signal.iloc[-1]),
-            macd_hist=float(hist_macd.iloc[-1]),
-            sma_20=float(sma_20.iloc[-1]),
-            sma_50=float(sma_50.iloc[-1]),
-            timestamp=datetime.now()
+            rsi=indicators["rsi"],
+            macd=indicators["macd"],
+            macd_signal=indicators["macd_signal"],
+            macd_hist=indicators["macd_hist"],
+            sma_20=indicators["sma_20"],
+            sma_50=indicators["sma_50"],
+            timestamp=datetime.utcnow(),
         )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Error calculating technical indicators for {symbol}: {str(e)}")
+    except YahooFinanceError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Error calculating technical indicators for {symbol}: {exc}",
+        )
+
 
 @app4_router.get("/stock/{symbol}/info", response_model=CompanyInfo)
-async def get_company_info(symbol: str):
+async def get_company_info(symbol: str) -> CompanyInfo:
     try:
-        stock = yf.Ticker(symbol)
-        info = stock.info
-        
+        profile = get_company_profile(symbol)
         return CompanyInfo(
-            symbol=symbol,
-            name=info.get('longName', ''),
-            sector=info.get('sector', ''),
-            industry=info.get('industry', ''),
-            market_cap=info.get('marketCap', 0),
-            pe_ratio=info.get('forwardPE', 0),
-            dividend_yield=info.get('dividendYield', 0) * 100 if info.get('dividendYield') else 0,
-            beta=info.get('beta', 0),
-            fifty_two_week_high=info.get('fiftyTwoWeekHigh', 0),
-            fifty_two_week_low=info.get('fiftyTwoWeekLow', 0)
+            symbol=profile["symbol"],
+            name=profile["name"],
+            sector=profile["sector"],
+            industry=profile["industry"],
+            market_cap=profile["market_cap"],
+            pe_ratio=profile["pe_ratio"],
+            dividend_yield=profile["dividend_yield"],
+            beta=profile["beta"],
+            fifty_two_week_high=profile["fifty_two_week_high"],
+            fifty_two_week_low=profile["fifty_two_week_low"],
         )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Error fetching company info for {symbol}: {str(e)}")
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=404, detail=f"Error fetching company info for {symbol}: {exc}")
+
 
 @app4_router.get("/stock/{symbol}/history")
-async def get_stock_history(symbol: str, timeframe: str = "1d"):
+async def get_stock_history(symbol: str, timeframe: str = "1d") -> List[Dict[str, float]]:
     try:
         if not validate_stock_symbol(symbol):
             raise HTTPException(status_code=404, detail=f"Invalid or unavailable stock symbol: {symbol}")
-        
-        stock = yf.Ticker(symbol)
-        
-        # Convert timeframe to yfinance period and interval
+
         period_map = {
             "1D": ("1d", "1m"),
             "1W": ("5d", "5m"),
             "1M": ("1mo", "1h"),
             "3M": ("3mo", "1d"),
-            "1Y": ("1y", "1d")
+            "1Y": ("1y", "1d"),
         }
-        
         period, interval = period_map.get(timeframe, ("1d", "1m"))
-        history = stock.history(period=period, interval=interval)
-        
-        if history.empty:
-            raise HTTPException(status_code=404, detail=f"No historical data available for {symbol}")
-        
-        history_list = []
-        for index, row in history.iterrows():
-            history_list.append({
-                "timestamp": index.isoformat(),
-                "price": float(row['Close']),
-                "open": float(row['Open']),
-                "high": float(row['High']),
-                "low": float(row['Low']),
-                "volume": int(row['Volume'])
-            })
-        
-        return history_list
-    except Exception as e:
-        logger.error(f"Error fetching history for {symbol}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fetching history for {symbol}: {str(e)}")
+        return get_price_history(symbol, period=period, interval=interval)
+    except YahooFinanceError as exc:
+        logger.error("Error fetching history for %s: %s", symbol, exc)
+        raise HTTPException(status_code=500, detail=f"Error fetching history for {symbol}: {exc}")
 
-@app4_router.get("/stock/{symbol}/news")
-async def get_stock_news(symbol: str):
+
+@app4_router.get("/stock/{symbol}/news", response_model=List[NewsItem])
+async def get_stock_news(symbol: str) -> List[NewsItem]:
     try:
-        if not validate_stock_symbol(symbol):
-            raise HTTPException(status_code=404, detail=f"Invalid or unavailable stock symbol: {symbol}")
-            
-        stock = yf.Ticker(symbol)
-        news = stock.news
-        
-        if not news:
-            return []
-            
-        news_list = []
-        for item in news:
-            try:
-                # Skip items with missing required fields
-                if not all(key in item for key in ['title', 'summary', 'source', 'link']):
-                    continue
-                    
-                # Skip items with empty required fields
-                if not item['title'] or not item['summary'] or not item['source'] or not item['link']:
-                    continue
-                
-                # Handle timestamp conversion safely
-                publish_time = item.get('providerPublishTime', 0)
-                if publish_time:
-                    timestamp = datetime.fromtimestamp(publish_time)
-                else:
-                    timestamp = datetime.now()  # Fallback to current time if no timestamp
-                
-                news_item = {
-                    "title": item['title'],
-                    "summary": item['summary'],
-                    "source": item['source'],
-                    "published_at": timestamp.isoformat(),
-                    "url": item['link']
-                }
-                
-                # Only add valid news items
-                if all(news_item.values()):
-                    news_list.append(news_item)
-                print(news_item)
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Error processing news item: {str(e)}")
-                continue
-        
-        # Sort news by published_at in descending order (newest first)
-        news_list.sort(key=lambda x: x['published_at'], reverse=True)
-        
-        # Limit to 20 most recent news items
-        return news_list[:20]
-        
-    except Exception as e:
-        logger.error(f"Error fetching news for {symbol}: {str(e)}")
-        raise HTTPException(status_code=404, detail=f"Error fetching news for {symbol}: {str(e)}")
+        news = get_news_items(symbol)
+        return [
+            NewsItem(
+                title=item["title"],
+                summary=item["summary"],
+                source=item["source"],
+                timestamp=datetime.fromisoformat(item["published_at"]),
+                url=item["url"],
+            )
+            for item in news
+        ]
+    except YahooFinanceError as exc:
+        logger.error("Error fetching news for %s: %s", symbol, exc)
+        raise HTTPException(status_code=404, detail=f"Error fetching news for {symbol}: {exc}")
+
 
 @app4_router.get("/stock/{symbol}/major_holders")
-async def get_major_holders(symbol: str):
+async def get_major_holders_endpoint(symbol: str):
     try:
-        stock = yf.Ticker(symbol)
-        major_holders = stock.major_holders
-        
-        if major_holders is None or major_holders.empty:
+        holders = get_major_holders(symbol)
+        if not holders:
             return {"message": "No major holders data available"}
-            
-        holders_list = []
-        for index, row in major_holders.iterrows():
-            holders_list.append({
-                "category": row[0],
-                "percentage": row[1],
-                "value": row[2]
-            })
-        
-        return holders_list
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Error fetching major holders for {symbol}: {str(e)}")
+        return holders
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=404, detail=f"Error fetching major holders for {symbol}: {exc}")
+
 
 @app4_router.get("/stock/{symbol}/earnings")
 async def get_earnings(symbol: str):
     try:
-        stock = yf.Ticker(symbol)
-        earnings = stock.earnings
-        
-        if earnings is None or earnings.empty:
+        earnings = get_earnings_history(symbol)
+        if not earnings:
             return {"message": "No earnings data available"}
-            
-        earnings_list = []
-        for index, row in earnings.iterrows():
-            earnings_list.append({
-                "date": index.isoformat(),
-                "revenue": row['Revenue'],
-                "earnings": row['Earnings'],
-                "earnings_per_share": row['Earnings Per Share']
-            })
-        
-        return earnings_list
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Error fetching earnings for {symbol}: {str(e)}")
+        return earnings
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=404, detail=f"Error fetching earnings for {symbol}: {exc}")
 
-@app4_router.get("/nifty50", response_model=Dict)
+
+@app4_router.get("/nifty50")
 async def get_nifty50():
-    ticker = "^NSEI"  # Ticker symbol for NIFTY 50
-    return JSONResponse(content=get_index_data(ticker))
+    try:
+        return get_index_quote("^NSEI")
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
-# Endpoint to fetch SENSEX data
-@app4_router.get("/sensex", response_model=Dict)
+
+@app4_router.get("/sensex")
 async def get_sensex():
-    ticker = "^BSESN"  # Ticker symbol for SENSEX
-    return JSONResponse(content=get_index_data(ticker))
+    try:
+        return get_index_quote("^BSESN")
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
-# Endpoint to fetch BANK NIFTY data
-@app4_router.get("/banknifty", response_model=Dict)
+
+@app4_router.get("/banknifty")
 async def get_banknifty():
-    ticker = "^NSEBANK"  # Ticker symbol for BANK NIFTY
-    return JSONResponse(content=get_index_data(ticker))
+    try:
+        return get_index_quote("^NSEBANK")
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app4_router.get("/search/{query}")
 async def search_stocks(query: str):
     try:
-        stock = yf.Ticker(query)
-        info = stock.info
-        
-        return {
-            "symbol": query,
-            "name": info.get('longName', ''),
-            "sector": info.get('sector', ''),
-            "industry": info.get('industry', '')
-        }
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Error searching for {query}: {str(e)}")
+        return search_symbol(query)
+    except YahooFinanceError as exc:
+        raise HTTPException(status_code=404, detail=f"Error searching for {query}: {exc}")
