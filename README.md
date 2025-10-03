@@ -4,7 +4,7 @@ A full-stack trading simulation platform with live market data, personalised str
 
 ## Features
 
-- **Live market data** sourced on demand from Yahoo Finance via `yfinance`
+- **Live market data** sourced on demand from Yahoo Finance with resilient fallbacks for missing fields
 - **User authentication** with secure password hashing and expiring API tokens stored in MongoDB
 - **Simulation tracking** that persists strategy details, capital allocation, and status per user
 - **Responsive dashboard** showing watchlists, new simulation forms, and saved simulations
@@ -41,6 +41,11 @@ A full-stack trading simulation platform with live market data, personalised str
    ```bash
    uvicorn backend.main:app --reload --port 8000
    ```
+   > To run without MongoDB during development, export `USE_IN_MEMORY_DB=true`. All data is ephemeral and resets on restart.
+4. (Optional) Verify MongoDB connectivity:
+   ```bash
+   python test.py
+   ```
 
 The API will be available at `http://localhost:8000` and includes automatically generated Swagger docs at `/docs`.
 
@@ -62,13 +67,18 @@ The backend recognises the following environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MONGODB_URI` | Connection string for MongoDB | `mongodb://localhost:27017` |
+| `MONGO_URL` | Preferred connection string for MongoDB | unset (falls back to defaults) |
+| `MONGODB_URI` | Alternate connection string (used if `MONGO_URL` is unset) | `mongodb://localhost:27017` |
+| `MONGO_URI` | Legacy connection string key (used if the others are unset) | unset |
 | `MONGODB_DB` | Database name | `algo-trade-simulator` |
 | `FRONTEND_ORIGIN` | Allowed CORS origin for the web app | `http://localhost:5173` |
 | `SESSION_DURATION_DAYS` | Optional override for session lifetime in days | `7` |
 | `ENABLE_DEV_ENDPOINTS` | Enables development-only routes such as the login bypass helper | `false` |
+| `USE_IN_MEMORY_DB` | Stores users, sessions, and simulations in memory for local testing (no MongoDB required) | `false` |
 
 > **Tip:** When deploying, supply a production MongoDB connection string and set `FRONTEND_ORIGIN` to your hosted frontend URL.
+
+> If multiple Mongo variables are set, `MONGO_URL` wins, followed by `MONGODB_URI`, then the legacy `MONGO_URI`.
 
 ### Frontend environment
 

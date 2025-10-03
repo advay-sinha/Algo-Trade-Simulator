@@ -5,26 +5,35 @@ import datetime as dt
 import os
 import secrets
 from typing import Annotated, Any, Dict, List, Optional
+from types import SimpleNamespace
 
 import yfinance as yf
+import requests
 from bson import ObjectId
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
+from motor.motor_asyncio import AsyncIOMotorClient
 from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def env_flag(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in TRUTHY_ENV_VALUES
+
+
 DATABASE_NAME = os.getenv("MONGODB_DB", "algo-trade-simulator")
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGO_URL = os.getenv("MONGO_URL")
+MONGO_URI_ALIAS = os.getenv("MONGO_URI")
+MONGODB_URI_ENV = os.getenv("MONGODB_URI")
+_raw_mongodb_uri = MONGO_URL or MONGODB_URI_ENV or MONGO_URI_ALIAS
+MONGODB_URI = _raw_mongodb_uri or "mongodb://localhost:27017"
+USE_IN_MEMORY_DB = env_flag("USE_IN_MEMORY_DB") or MONGODB_URI.startswith("memory://")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
-ENABLE_DEV_ENDPOINTS = os.getenv("ENABLE_DEV_ENDPOINTS", "false").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+ENABLE_DEV_ENDPOINTS = env_flag("ENABLE_DEV_ENDPOINTS")
 try:
     session_days = float(os.getenv("SESSION_DURATION_DAYS", "7"))
 except ValueError:
@@ -34,11 +43,168 @@ SESSION_DURATION = dt.timedelta(days=session_days)
 DEFAULT_WATCHLIST = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"]
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-client = AsyncIOMotorClient(MONGODB_URI)
-db = client[DATABASE_NAME]
-users: AsyncIOMotorCollection = db["users"]
-sessions: AsyncIOMotorCollection = db["sessions"]
-simulations: AsyncIOMotorCollection = db["simulations"]
+
+
+class InMemoryInsertOneResult(SimpleNamespace):
+    inserted_id: ObjectId
+
+
+if USE_IN_MEMORY_DB:
+
+    class InMemoryUpdateResult(SimpleNamespace):
+        matched_count: int
+        modified_count: int
+
+    class InMemoryDeleteResult(SimpleNamespace):
+        deleted_count: int
+
+    class InMemoryCursor:
+        def __init__(self, documents: List[Dict[str, Any]]):
+            self._documents = [doc.copy() for doc in documents]
+
+        def sort(self, key, direction=None):
+            if isinstance(key, list):
+                sort_fields = key
+            else:
+                sort_fields = [(key, direction or 1)]
+
+            for field, order in reversed(sort_fields):
+                self._documents.sort(key=lambda item: item.get(field), reverse=order == -1)
+
+            return self
+
+        async def to_list(self, length: Optional[int] = None) -> List[Dict[str, Any]]:
+            if length is None:
+                return [doc.copy() for doc in self._documents]
+            return [doc.copy() for doc in self._documents[:length]]
+
+    class InMemoryCollection:
+        def __init__(self, name: str):
+            self.name = name
+            self._documents: List[Dict[str, Any]] = []
+            self._unique_fields: set[str] = set()
+
+        async def create_index(self, keys, unique: bool = False, **kwargs) -> str:
+            if isinstance(keys, str):
+                fields = [keys]
+            elif isinstance(keys, tuple):
+                fields = [keys[0]]
+            else:
+                fields = [item[0] if isinstance(item, (tuple, list)) else item for item in keys]
+
+            if unique:
+                self._unique_fields.update(fields)
+
+            return "_".join(fields) or f"{self.name}_idx"
+
+        def _matches(self, document: Dict[str, Any], filter: Optional[Dict[str, Any]]) -> bool:
+            if not filter:
+                return True
+            for key, value in filter.items():
+                if document.get(key) != value:
+                    return False
+            return True
+
+        def _ensure_unique(self, document: Dict[str, Any]) -> None:
+            for field in self._unique_fields:
+                value = document.get(field)
+                if value is None:
+                    continue
+                for other in self._documents:
+                    if other is document:
+                        continue
+                    if other.get(field) == value:
+                        raise DuplicateKeyError(f"Duplicate value for {field}")
+
+        async def insert_one(self, document: Dict[str, Any]) -> InMemoryInsertOneResult:
+            doc = document.copy()
+            doc.setdefault("_id", ObjectId())
+            self._documents.append(doc)
+            try:
+                self._ensure_unique(doc)
+            except DuplicateKeyError:
+                self._documents.pop()
+                raise
+            return InMemoryInsertOneResult(inserted_id=doc["_id"])
+
+        async def find_one(self, filter: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+            for doc in reversed(self._documents):
+                if self._matches(doc, filter):
+                    return doc.copy()
+            return None
+
+        def find(self, filter: Optional[Dict[str, Any]] = None) -> InMemoryCursor:
+            matched = [doc for doc in self._documents if self._matches(doc, filter)]
+            return InMemoryCursor(matched)
+
+        async def delete_one(self, filter: Dict[str, Any]) -> InMemoryDeleteResult:
+            for index, doc in enumerate(self._documents):
+                if self._matches(doc, filter):
+                    self._documents.pop(index)
+                    return InMemoryDeleteResult(deleted_count=1)
+            return InMemoryDeleteResult(deleted_count=0)
+
+        def _apply_update(self, document: Dict[str, Any], update: Dict[str, Any]) -> None:
+            set_values = update.get("$set", {})
+            for key, value in set_values.items():
+                document[key] = value
+
+        async def update_one(self, filter: Dict[str, Any], update: Dict[str, Any]) -> InMemoryUpdateResult:
+            for doc in self._documents:
+                if self._matches(doc, filter):
+                    before = doc.copy()
+                    self._apply_update(doc, update)
+                    try:
+                        self._ensure_unique(doc)
+                    except DuplicateKeyError:
+                        doc.clear()
+                        doc.update(before)
+                        raise
+                    modified = 1 if doc != before else 0
+                    return InMemoryUpdateResult(matched_count=1, modified_count=modified)
+            return InMemoryUpdateResult(matched_count=0, modified_count=0)
+
+        async def find_one_and_update(
+            self, filter: Dict[str, Any], update: Dict[str, Any], return_document: ReturnDocument = ReturnDocument.BEFORE
+        ) -> Optional[Dict[str, Any]]:
+            for doc in self._documents:
+                if self._matches(doc, filter):
+                    before = doc.copy()
+                    self._apply_update(doc, update)
+                    try:
+                        self._ensure_unique(doc)
+                    except DuplicateKeyError:
+                        doc.clear()
+                        doc.update(before)
+                        raise
+                    return doc.copy() if return_document == ReturnDocument.AFTER else before
+            return None
+
+    class InMemoryClient:
+        def __init__(self):
+            self._collections: Dict[str, InMemoryCollection] = {}
+
+        def get_collection(self, name: str) -> InMemoryCollection:
+            collection = self._collections.get(name)
+            if collection is None:
+                collection = InMemoryCollection(name)
+                self._collections[name] = collection
+            return collection
+
+        def close(self) -> None:
+            self._collections.clear()
+
+    client = InMemoryClient()
+    users = client.get_collection("users")
+    sessions = client.get_collection("sessions")
+    simulations = client.get_collection("simulations")
+
+else:
+    client = AsyncIOMotorClient(MONGODB_URI)
+    db = client[DATABASE_NAME]
+    users = db["users"]
+    sessions = db["sessions"]
+    simulations = db["simulations"]
 
 
 class UserPublic(BaseModel):
@@ -56,7 +222,7 @@ class AuthResponse(BaseModel):
 
 class SignupRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=72)
     name: str = Field(min_length=1, max_length=100)
 
 
@@ -191,29 +357,69 @@ async def fetch_quote(symbol: str) -> MarketQuote:
     normalized = normalize_symbol(symbol)
 
     def _load() -> MarketQuote:
-        ticker = yf.Ticker(normalized)
-        info = getattr(ticker, "fast_info", {}) or {}
-        price = info.get("last_price")
-        prev_close = info.get("previous_close")
-        currency = info.get("currency") or "USD"
+        quote_payload: Dict[str, Any] | None = None
+        yahoo_error: Exception | None = None
+
+        try:
+            response = requests.get(
+                "https://query1.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": normalized},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=8,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            results = payload.get("quoteResponse", {}).get("result", [])
+            if results:
+                quote_payload = results[0]
+        except Exception as exc:  # noqa: BLE001
+            yahoo_error = exc
+
+        price: Optional[float] = None
+        prev_close: Optional[float] = None
+        currency = "USD"
+
+        if quote_payload:
+            price = quote_payload.get("regularMarketPrice")
+            prev_close = quote_payload.get("regularMarketPreviousClose")
+            currency = (
+                quote_payload.get("currency")
+                or quote_payload.get("financialCurrency")
+                or currency
+            )
+
+        ticker = None
+        if price is None or price == 0 or prev_close is None:
+            ticker = yf.Ticker(normalized)
+            info = getattr(ticker, "fast_info", {}) or {}
+            price = info.get("last_price") or price
+            prev_close = info.get("previous_close") if prev_close is None else prev_close
+            currency = info.get("currency") or currency
+
+        if (price is None or price == 0) and ticker is None:
+            ticker = yf.Ticker(normalized)
 
         if price is None or price == 0:
-            history = ticker.history(period="5d", interval="1d")
+            history = ticker.history(period="5d", interval="1d", auto_adjust=False)
             if not history.empty:
                 price = float(history["Close"].iloc[-1])
                 if prev_close is None and len(history) > 1:
                     prev_close = float(history["Close"].iloc[-2])
 
         if price is None:
+            if yahoo_error is not None:
+                raise ValueError(f"Yahoo quote API failed: {yahoo_error}") from yahoo_error
             raise ValueError("No price data available")
 
         if prev_close is None or prev_close == 0:
             change = 0.0
             change_percent = 0.0
+            previous_close_value: Optional[float] = None
         else:
             prev_close = float(prev_close)
             change = float(price) - prev_close
             change_percent = (change / prev_close) * 100
+            previous_close_value = prev_close
 
         return MarketQuote.model_validate(
             {
@@ -221,8 +427,8 @@ async def fetch_quote(symbol: str) -> MarketQuote:
                 "price": float(price),
                 "change": float(change),
                 "changePercent": float(change_percent),
-                "previousClose": float(prev_close) if prev_close else None,
-                "currency": currency,
+                "previousClose": previous_close_value,
+                "currency": currency or "USD",
                 "updated": dt.datetime.utcnow(),
             }
         )
@@ -234,6 +440,9 @@ async def fetch_quote(symbol: str) -> MarketQuote:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to load {normalized}: {exc}",
         ) from exc
+
+
+
 
 
 app = FastAPI(title="Algo Trade Simulator API")

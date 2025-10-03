@@ -7,6 +7,8 @@ interface SignupFormProps {
   error?: string | null;
 }
 
+const MAX_PASSWORD_LENGTH = 72;
+
 export function SignupForm({ onSubmit, onSwitchToLogin, loading, error }: SignupFormProps) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -29,6 +31,11 @@ export function SignupForm({ onSubmit, onSwitchToLogin, loading, error }: Signup
 
     if (password.length < 8) {
       setValidationError("Password must be at least 8 characters long.");
+      return;
+    }
+
+    if (password.length > MAX_PASSWORD_LENGTH) {
+      setValidationError(`Password must be ${MAX_PASSWORD_LENGTH} characters or fewer.`);
       return;
     }
 
@@ -73,6 +80,7 @@ export function SignupForm({ onSubmit, onSwitchToLogin, loading, error }: Signup
             type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
+            maxLength={MAX_PASSWORD_LENGTH}
             placeholder="Create a strong password"
             autoComplete="new-password"
           />
