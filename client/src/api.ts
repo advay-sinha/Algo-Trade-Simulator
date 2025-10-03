@@ -65,12 +65,21 @@ export interface LoginPayload {
   password: string;
 }
 
+export interface DevAuthBypassPayload {
+  email?: string;
+  name?: string;
+}
+
 export function signup(payload: SignupPayload) {
   return request<AuthResponse>("/auth/signup", { method: "POST", body: payload });
 }
 
 export function login(payload: LoginPayload) {
   return request<AuthResponse>("/auth/login", { method: "POST", body: payload });
+}
+
+export function devAuthBypass(payload?: DevAuthBypassPayload) {
+  return request<AuthResponse>("/dev/auth/bypass", { method: "POST", body: payload });
 }
 
 export function fetchWatchlist(symbols?: string[]) {

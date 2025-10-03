@@ -7,7 +7,9 @@ import {
   login,
   signup,
   updateSimulation,
+  devAuthBypass,
   type AuthResponse,
+  type DevAuthBypassPayload,
 } from "./api";
 import { Dashboard } from "./components/Dashboard";
 import { LoginForm } from "./components/LoginForm";
@@ -23,6 +25,19 @@ interface SessionState {
   user: User;
 }
 
+const TRUTHY_ENV_FLAGS = new Set(["1", "true", "yes", "on"]);
+
+function isEnvFlagEnabled(value: string | undefined) {
+  if (!value) {
+    return false;
+  }
+  return TRUTHY_ENV_FLAGS.has(value.trim().toLowerCase());
+}
+
+const LOGIN_BYPASS_ENABLED = isEnvFlagEnabled(import.meta.env.VITE_ENABLE_LOGIN_BYPASS);
+const LOGIN_BYPASS_EMAIL = import.meta.env.VITE_LOGIN_BYPASS_EMAIL;
+const LOGIN_BYPASS_NAME = import.meta.env.VITE_LOGIN_BYPASS_NAME;
+
 export default function App() {
   const [view, setView] = useState<View>("login");
   const [token, setToken] = useState<string | null>(null);
@@ -31,6 +46,25 @@ export default function App() {
   const [simulations, setSimulations] = useState<Simulation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const loginBypassEnabled = LOGIN_BYPASS_ENABLED;
+  const [initializingBypass, setInitializingBypass] = useState(loginBypassEnabled);
+  const [bypassInProgress, setBypassInProgress] = useState(false);
+  const [bypassFailed, setBypassFailed] = useState(false);
+
+  const bypassPayload = useMemo<DevAuthBypassPayload | undefined>(() => {
+    const email = LOGIN_BYPASS_EMAIL?.trim();
+    const name = LOGIN_BYPASS_NAME?.trim();
+    if (!email && !name) {
+      return undefined;
+    }
+    return {
+      email: email || undefined,
+      name: name || undefined,
+    };
+  }, []);
+
+  const shouldAttemptBypass = loginBypassEnabled && !bypassFailed && !token && !user;
 
   useEffect(() => {
     const stored = window.localStorage.getItem("algo-trade-session");
@@ -91,6 +125,64 @@ export default function App() {
     setUser(response.user);
     setView("dashboard");
   }, []);
+
+  useEffect(() => {
+    // Attempt developer login bypass when enabled via env flag.
+    if (!loginBypassEnabled) {
+      setInitializingBypass(false);
+      return;
+    }
+
+    if (!shouldAttemptBypass) {
+      setInitializingBypass(false);
+      return;
+    }
+
+    if (bypassInProgress) {
+      return;
+    }
+
+    setBypassInProgress(true);
+    setInitializingBypass(true);
+    setError(null);
+    setLoading(true);
+
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const response = await devAuthBypass(bypassPayload);
+        if (cancelled) {
+          return;
+        }
+        setBypassFailed(false);
+        handleAuthSuccess(response);
+      } catch (bypassError) {
+        if (cancelled) {
+          return;
+        }
+        console.error(bypassError);
+        setBypassFailed(true);
+        setError(
+          bypassError instanceof Error
+            ? `Login bypass failed: ${bypassError.message}`
+            : "Login bypass is unavailable. Please sign in manually.",
+        );
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setBypassInProgress(false);
+          setInitializingBypass(false);
+        }
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loginBypassEnabled, shouldAttemptBypass, bypassInProgress, bypassPayload, handleAuthSuccess]);
 
   const handleLogin = useCallback(
     async (email: string, password: string) => {
@@ -193,6 +285,23 @@ export default function App() {
   }, []);
 
   const authError = useMemo(() => (view === "dashboard" ? null : error), [view, error]);
+
+  if (initializingBypass) {
+    return (
+      <div
+        style={{
+          alignItems: "center",
+          color: "#e2e8f0",
+          display: "flex",
+          fontSize: "1.1rem",
+          justifyContent: "center",
+          minHeight: "100vh",
+        }}
+      >
+        Signing you in...
+      </div>
+    );
+  }
 
   if (!token || !user || view !== "dashboard") {
     return view === "signup" ? (

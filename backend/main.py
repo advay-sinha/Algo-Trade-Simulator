@@ -19,6 +19,12 @@ from pymongo.errors import DuplicateKeyError
 DATABASE_NAME = os.getenv("MONGODB_DB", "algo-trade-simulator")
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+ENABLE_DEV_ENDPOINTS = os.getenv("ENABLE_DEV_ENDPOINTS", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 try:
     session_days = float(os.getenv("SESSION_DURATION_DAYS", "7"))
 except ValueError:
@@ -57,6 +63,12 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+class DevBypassRequest(BaseModel):
+    email: Optional[EmailStr] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class MarketQuote(BaseModel):
@@ -283,6 +295,52 @@ async def login_endpoint(payload: Annotated[LoginRequest, Body(...)]) -> AuthRes
     token = await issue_session(user["_id"])
     return AuthResponse(token=token, user=serialize_user(user))
 
+if ENABLE_DEV_ENDPOINTS:
+
+    @app.post("/dev/auth/bypass", response_model=AuthResponse)
+    async def dev_auth_bypass(
+        payload: Annotated[Optional[DevBypassRequest], Body(default=None)] = None,
+    ) -> AuthResponse:
+        request_data = payload or DevBypassRequest()
+        normalized_email = (request_data.email or "dev@example.com").lower()
+        preferred_name = request_data.name.strip() if request_data.name else "Developer"
+
+        user = await users.find_one({"email": normalized_email})
+        now = dt.datetime.utcnow()
+
+        if not user:
+            password_hash = pwd_context.hash(secrets.token_urlsafe(16))
+            user_doc = {
+                "email": normalized_email,
+                "password_hash": password_hash,
+                "name": preferred_name,
+                "created_at": now,
+                "updated_at": now,
+            }
+            try:
+                result = await users.insert_one(user_doc)
+            except DuplicateKeyError:
+                user = await users.find_one({"email": normalized_email})
+            else:
+                user = {"_id": result.inserted_id, **user_doc}
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to create development account.",
+            )
+
+        if preferred_name and preferred_name != user.get("name"):
+            await users.update_one(
+                {"_id": user["_id"]},
+                {"$set": {"name": preferred_name, "updated_at": now}},
+            )
+            user = {**user, "name": preferred_name, "updated_at": now}
+
+        token = await issue_session(user["_id"])
+        return AuthResponse(token=token, user=serialize_user(user))
+
+
 
 @app.get("/market/watchlist", response_model=List[MarketQuote])
 async def watchlist_endpoint(
@@ -374,19 +432,23 @@ async def update_simulation_endpoint(
     return serialize_simulation(result)
 
 
+from fastapi import Response
+
 @app.delete("/simulations/{simulation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_simulation_endpoint(
     simulation_id: str,
     current_user: Dict[str, Any] = Depends(get_current_user),
-) -> None:
+) -> Response:
     try:
         obj_id = ObjectId(simulation_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid simulation id.") from exc
 
     deletion = await simulations.delete_one({"_id": obj_id, "user_id": current_user["_id"]})
     if deletion.deleted_count == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Simulation not found.")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/auth/session", response_model=AuthResponse)

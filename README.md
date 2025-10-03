@@ -66,8 +66,22 @@ The backend recognises the following environment variables:
 | `MONGODB_DB` | Database name | `algo-trade-simulator` |
 | `FRONTEND_ORIGIN` | Allowed CORS origin for the web app | `http://localhost:5173` |
 | `SESSION_DURATION_DAYS` | Optional override for session lifetime in days | `7` |
+| `ENABLE_DEV_ENDPOINTS` | Enables development-only routes such as the login bypass helper | `false` |
 
 > **Tip:** When deploying, supply a production MongoDB connection string and set `FRONTEND_ORIGIN` to your hosted frontend URL.
+
+### Frontend environment
+
+The Vite frontend honours the following environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VITE_API_BASE_URL` | Base URL for API requests | `http://localhost:8000` |
+| `VITE_ENABLE_LOGIN_BYPASS` | Auto-sign in via the dev bypass endpoint when set to `true` | `false` |
+| `VITE_LOGIN_BYPASS_EMAIL` | Optional email used when creating the bypass session | unset (backend default) |
+| `VITE_LOGIN_BYPASS_NAME` | Optional name applied to the bypass session | unset (backend default) |
+
+> To skip the login page during development, run the backend with `ENABLE_DEV_ENDPOINTS=true` and set `VITE_ENABLE_LOGIN_BYPASS=true` before starting the Vite dev server.
 
 ## API overview
 
