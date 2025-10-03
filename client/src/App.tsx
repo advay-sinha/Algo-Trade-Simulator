@@ -37,6 +37,7 @@ function isEnvFlagEnabled(value: string | undefined) {
 const LOGIN_BYPASS_ENABLED = isEnvFlagEnabled(import.meta.env.VITE_ENABLE_LOGIN_BYPASS);
 const LOGIN_BYPASS_EMAIL = import.meta.env.VITE_LOGIN_BYPASS_EMAIL;
 const LOGIN_BYPASS_NAME = import.meta.env.VITE_LOGIN_BYPASS_NAME;
+const LOGIN_BYPASS_PATH = "/dev/auth/bypass";
 
 export default function App() {
   const [view, setView] = useState<View>("login");
@@ -47,7 +48,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loginBypassEnabled = LOGIN_BYPASS_ENABLED;
+  const [bypassRequestedFromPath] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.location.pathname === LOGIN_BYPASS_PATH;
+  });
+  const loginBypassEnabled = LOGIN_BYPASS_ENABLED || bypassRequestedFromPath;
   const [initializingBypass, setInitializingBypass] = useState(loginBypassEnabled);
   const [bypassInProgress, setBypassInProgress] = useState(false);
   const [bypassFailed, setBypassFailed] = useState(false);
@@ -155,6 +162,9 @@ export default function App() {
         if (cancelled) {
           return;
         }
+        if (bypassRequestedFromPath) {
+          window.history.replaceState(null, "", "/");
+        }
         setBypassFailed(false);
         handleAuthSuccess(response);
       } catch (bypassError) {
@@ -182,7 +192,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [loginBypassEnabled, shouldAttemptBypass, bypassInProgress, bypassPayload, handleAuthSuccess]);
+  }, [loginBypassEnabled, shouldAttemptBypass, bypassInProgress, bypassPayload, handleAuthSuccess, bypassRequestedFromPath]);
 
   const handleLogin = useCallback(
     async (email: string, password: string) => {

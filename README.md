@@ -82,6 +82,7 @@ The Vite frontend honours the following environment variables:
 | `VITE_LOGIN_BYPASS_NAME` | Optional name applied to the bypass session | unset (backend default) |
 
 > To skip the login page during development, run the backend with `ENABLE_DEV_ENDPOINTS=true` and set `VITE_ENABLE_LOGIN_BYPASS=true` before starting the Vite dev server.
+> You can also navigate to `http://localhost:5173/dev/auth/bypass` while the Vite dev server is running to trigger the bypass on demand.
 
 ## API overview
 
