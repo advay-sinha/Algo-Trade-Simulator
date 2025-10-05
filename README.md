@@ -4,10 +4,12 @@ A full-stack trading simulation platform with live market data, personalised str
 
 ## Features
 
-- **Live market data** sourced on demand from Yahoo Finance with resilient fallbacks for missing fields
-- **User authentication** with secure password hashing and expiring API tokens stored in MongoDB
-- **Simulation tracking** that persists strategy details, capital allocation, and status per user
-- **Responsive dashboard** showing watchlists, new simulation forms, and saved simulations
+- **Live market data** sourced on demand from Yahoo Finance with resilient quote/chart fallbacks
+- **Live market lab** page with ticker search, candlestick overlays, and intraday stats powered by Yahoo Finance
+- **AI-assisted strategy lab** that trains and backtests SMA crossovers on 5-year history and generates live signals
+- **Hybrid chatbot copilot** using local Ollama (Mistral) with DuckDuckGo fallback for research and automation, now including budget-aware, diversified allocation suggestions for short horizons
+- **Simulation workspace** for creating, updating, and tracking algorithmic trading experiments
+- **Home analytics dashboard** surfacing portfolio stats, trained strategies, and recent results
 - **Session recovery** using browser storage so signed-in users can resume quickly
 
 ## Tech stack
@@ -17,7 +19,7 @@ A full-stack trading simulation platform with live market data, personalised str
 | Frontend | React + Vite + TypeScript |
 | Backend  | FastAPI, Motor (MongoDB), Passlib |
 | Database | MongoDB |
-| Market data | `yfinance` (Yahoo Finance) |
+| Market data | Yahoo Finance quote & chart APIs (via requests) |
 
 ## Getting started
 
@@ -75,6 +77,10 @@ The backend recognises the following environment variables:
 | `SESSION_DURATION_DAYS` | Optional override for session lifetime in days | `7` |
 | `ENABLE_DEV_ENDPOINTS` | Enables development-only routes such as the login bypass helper | `false` |
 | `USE_IN_MEMORY_DB` | Stores users, sessions, and simulations in memory for local testing (no MongoDB required) | `false` |
+| `YAHOO_USER_AGENT` | Optional override for the header sent to Yahoo Finance endpoints | `Mozilla/5.0 (compatible; AlgoTradeSimulator/1.0; +https://example.com)` |
+| `OLLAMA_URL` | Base URL for the local Ollama service | `http://localhost:11434` |
+| `OLLAMA_MODEL` | Ollama model alias to use for chat completions | `mistral` |
+| `OLLAMA_TIMEOUT_SECONDS` | Timeout (seconds) for Ollama responses | `30` |
 
 > **Tip:** When deploying, supply a production MongoDB connection string and set `FRONTEND_ORIGIN` to your hosted frontend URL.
 
@@ -103,10 +109,26 @@ The FastAPI server exposes REST endpoints. Key routes include:
 - `GET /auth/session` – validate a bearer token and retrieve the current user
 - `GET /market/watchlist` – fetch live quotes for a comma separated list of symbols
 - `GET /market/quote/{symbol}` – fetch a single market quote
+- `GET /market/search` - look up tickers and exchanges that match a user query
+- `GET /market/chart/{symbol}` - return candlestick-ready chart data with configurable range and interval
 - `GET /simulations` – list saved simulations for the authenticated user
 - `POST /simulations` – create a new simulation for the current user
 - `PATCH /simulations/{id}` – update status or notes for a simulation
 - `DELETE /simulations/{id}` – remove a simulation
+- `GET /analytics/overview` - retrieve aggregated dashboard metrics for the signed-in user
+- `GET /analytics/strategies` - list the built-in strategy catalogue shown on the info page
+- `POST /analytics/train` - backtest/train the SMA crossover strategy on the last five years of data
+- `POST /analytics/predict` - generate a live signal using the last trained strategy
+- `GET /analytics/sparkline` - return sparkline-friendly price series for requested symbols
+- `POST /chat` - query the hybrid chatbot (Ollama + DuckDuckGo fallback)
+
+## Strategy lab & chatbot
+
+1. Ensure the backend can reach Yahoo Finance (no VPN/proxy required) and that Ollama is running locally with the Mistral model pulled (`ollama run mistral`).
+2. Train a strategy from the **Simulations** page or via `POST /analytics/train` with a symbol plus short/long SMA windows (default 20/60).
+3. Request a fresh prediction from the **Home** page or `POST /analytics/predict` to evaluate the current market regime.
+4. Use the **Chatbot** page to ask questions, run quick research, or say "create a simulation for AAPL with 25k" to auto-spin a test scenario.
+
 
 Requests that require authentication expect an `Authorization: Bearer <token>` header. Tokens automatically expire after seven days.
 

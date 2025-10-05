@@ -6,6 +6,16 @@ interface WatchlistProps {
   loading: boolean;
 }
 
+function formatCurrency(value: number | null | undefined, currency?: string | null) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "—";
+  }
+  return value.toLocaleString(undefined, {
+    style: "currency",
+    currency: currency ?? "USD",
+  });
+}
+
 export function Watchlist({ quotes, onRefresh, loading }: WatchlistProps) {
   return (
     <div className="card">
@@ -36,30 +46,26 @@ export function Watchlist({ quotes, onRefresh, loading }: WatchlistProps) {
           </thead>
           <tbody>
             {quotes.map((quote) => {
-              const changeClass = quote.change >= 0 ? "trend-positive" : "trend-negative";
+              const changeValue = typeof quote.change === "number" ? quote.change : null;
+              const changePercent = typeof quote.changePercent === "number" ? quote.changePercent : null;
+              const changeClass = changeValue === null ? "trend-neutral" : changeValue >= 0 ? "trend-positive" : "trend-negative";
               return (
                 <tr key={quote.symbol}>
                   <td>
                     <span className="badge">{quote.symbol}</span>
                   </td>
-                  <td>
-                    {quote.price.toLocaleString(undefined, {
-                      style: "currency",
-                      currency: quote.currency ?? "USD",
-                    })}
-                  </td>
+                  <td>{formatCurrency(quote.price, quote.currency)}</td>
                   <td className={changeClass}>
-                    {quote.change >= 0 ? "+" : ""}
-                    {quote.change.toFixed(2)} ({quote.changePercent.toFixed(2)}%)
+                    {changeValue === null || changePercent === null ? (
+                      "—"
+                    ) : (
+                      <>
+                        {changeValue >= 0 ? "+" : ""}
+                        {changeValue.toFixed(2)} ({changePercent.toFixed(2)}%)
+                      </>
+                    )}
                   </td>
-                  <td>
-                    {quote.previousClose
-                      ? quote.previousClose.toLocaleString(undefined, {
-                          style: "currency",
-                          currency: quote.currency ?? "USD",
-                        })
-                      : "—"}
-                  </td>
+                  <td>{formatCurrency(quote.previousClose ?? null, quote.currency)}</td>
                   <td>{new Date(quote.updated).toLocaleTimeString()}</td>
                 </tr>
               );

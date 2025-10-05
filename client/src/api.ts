@@ -4,6 +4,17 @@ import type {
   SimulationInput,
   SimulationUpdate,
   User,
+  OverviewResponse,
+  TrainingPayload,
+  TrainingResult,
+  PredictionResult,
+  StrategyDefinition,
+  ChatRequestPayload,
+  ChatResponsePayload,
+  ChatAction,
+  SparklineSeries,
+  SearchResult,
+  ChartResponse,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
@@ -40,6 +51,19 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const text = await response.text();
   const data = text ? JSON.parse(text) : undefined;
+
+
+if (response.status === 401) {
+  const unauthorizedDetail = data?.detail ?? response.statusText;
+  if (typeof window !== "undefined") {
+    window.localStorage.removeItem("algo-trade-session");
+  }
+  const unauthorizedError = new Error(
+    typeof unauthorizedDetail === "string" ? unauthorizedDetail : JSON.stringify(unauthorizedDetail),
+  );
+  (unauthorizedError as Error & { status?: number }).status = 401;
+  throw unauthorizedError;
+}
 
   if (!response.ok) {
     const detail = data?.detail ?? response.statusText;
@@ -112,4 +136,51 @@ export function deleteSimulation(token: string, id: string) {
     method: "DELETE",
     token,
   });
+}
+
+export function fetchOverview(token: string) {
+  return request<OverviewResponse>("/analytics/overview", { token });
+}
+
+export function fetchStrategies() {
+  return request<StrategyDefinition[]>("/analytics/strategies");
+}
+
+export function trainStrategy(token: string, payload: TrainingPayload) {
+  return request<TrainingResult>("/analytics/train", { method: "POST", body: payload, token });
+}
+
+export function predictStrategy(token: string, symbol: string) {
+  return request<PredictionResult>("/analytics/predict", {
+    method: "POST",
+    body: { symbol },
+    token,
+  });
+}
+
+export function askChat(token: string, payload: ChatRequestPayload) {
+  return request<ChatResponsePayload>("/chat", { method: "POST", body: payload, token });
+}
+
+export function fetchSparkline(token: string, symbols?: string[]) {
+  const params = symbols?.length ? `?symbols=${symbols.join(",")}` : "";
+  return request<SparklineSeries[]>(`/analytics/sparkline${params}`, { token });
+}
+
+export function searchSymbols(token: string, query: string) {
+  const encoded = encodeURIComponent(query);
+  return request<SearchResult[]>(`/market/search?q=${encoded}`, { token });
+}
+
+export function fetchChart(token: string, symbol: string, options?: { range?: string; interval?: string }) {
+  const params = new URLSearchParams();
+  if (options?.range) {
+    params.set("range", options.range);
+  }
+  if (options?.interval) {
+    params.set("interval", options.interval);
+  }
+  const query = params.toString();
+  const path = `/market/chart/${encodeURIComponent(symbol)}${query ? `?${query}` : ""}`;
+  return request<ChartResponse>(path, { token });
 }
