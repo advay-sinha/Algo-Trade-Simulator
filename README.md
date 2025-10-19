@@ -7,7 +7,7 @@ A full-stack trading simulation platform with live market data, personalised str
 - **Live market data** sourced on demand from Yahoo Finance with resilient quote/chart fallbacks
 - **Live market lab** page with ticker search, candlestick overlays, and intraday stats powered by Yahoo Finance
 - **AI-assisted strategy lab** that trains and backtests SMA crossovers on 5-year history and generates live signals
-- **Hybrid chatbot copilot** using local Ollama (Mistral) with DuckDuckGo fallback for research and automation, now including budget-aware, diversified allocation suggestions for short horizons
+- **Hybrid chatbot copilot** backed by OpenAI GPT models with heuristic fallbacks for research and automation, now including budget-aware, diversified allocation suggestions for short horizons
 - **Simulation workspace** for creating, updating, and tracking algorithmic trading experiments
 - **Home analytics dashboard** surfacing portfolio stats, trained strategies, and recent results
 - **Session recovery** using browser storage so signed-in users can resume quickly
@@ -78,9 +78,12 @@ The backend recognises the following environment variables:
 | `ENABLE_DEV_ENDPOINTS` | Enables development-only routes such as the login bypass helper | `false` |
 | `USE_IN_MEMORY_DB` | Stores users, sessions, and simulations in memory for local testing (no MongoDB required) | `false` |
 | `YAHOO_USER_AGENT` | Optional override for the header sent to Yahoo Finance endpoints | `Mozilla/5.0 (compatible; AlgoTradeSimulator/1.0; +https://example.com)` |
-| `OLLAMA_URL` | Base URL for the local Ollama service | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Ollama model alias to use for chat completions | `mistral` |
-| `OLLAMA_TIMEOUT_SECONDS` | Timeout (seconds) for Ollama responses | `30` |
+| `OPENAI_API_KEY` | API key used for chatbot completions | unset |
+| `OPENAI_MODEL` | Chat completion model identifier | `gpt-4o-mini` |
+| `OPENAI_TEMPERATURE` | Sampling temperature for completions | `0.3` |
+| `OPENAI_BASE_URL` | (Optional) Override base URL for Azure/OpenAI-compatible endpoints | unset |
+| `OPENAI_ORG` | (Optional) Organisation ID when using OpenAI accounts | unset |
+| `OPENAI_MODEL_FALLBACKS` | Comma-separated list of backup models tried if the primary model fails | unset |
 
 > **Tip:** When deploying, supply a production MongoDB connection string and set `FRONTEND_ORIGIN` to your hosted frontend URL.
 
@@ -120,11 +123,11 @@ The FastAPI server exposes REST endpoints. Key routes include:
 - `POST /analytics/train` - backtest/train the SMA crossover strategy on the last five years of data
 - `POST /analytics/predict` - generate a live signal using the last trained strategy
 - `GET /analytics/sparkline` - return sparkline-friendly price series for requested symbols
-- `POST /chat` - query the hybrid chatbot (Ollama + DuckDuckGo fallback)
+- `POST /chat` - query the hybrid chatbot backed by OpenAI completions
 
 ## Strategy lab & chatbot
 
-1. Ensure the backend can reach Yahoo Finance (no VPN/proxy required) and that Ollama is running locally with the Mistral model pulled (`ollama run mistral`).
+1. Ensure the backend can reach Yahoo Finance (no VPN/proxy required) and that the `OPENAI_API_KEY` environment variable is set for the backend service. Optionally add `OPENAI_MODEL_FALLBACKS` (e.g. `gpt-4o,gpt-3.5-turbo`) so the assistant can fall back when a model hits account limits.
 2. Train a strategy from the **Simulations** page or via `POST /analytics/train` with a symbol plus short/long SMA windows (default 20/60).
 3. Request a fresh prediction from the **Home** page or `POST /analytics/predict` to evaluate the current market regime.
 4. Use the **Chatbot** page to ask questions, run quick research, or say "create a simulation for AAPL with 25k" to auto-spin a test scenario.
