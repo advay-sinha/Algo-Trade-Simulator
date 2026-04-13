@@ -175,7 +175,3 @@ Requests that require authentication expect an `Authorization: Bearer <token>` h
 - Run `npm run check` before committing frontend TypeScript changes to ensure type safety.
 - Run `python -m compileall backend` to catch syntax errors in the FastAPI service.
 - Update this README whenever you add or change developer-facing commands or environment variables.
-
-## License
-
-This project is released under the MIT License.
