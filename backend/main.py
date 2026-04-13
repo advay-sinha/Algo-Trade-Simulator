@@ -844,15 +844,23 @@ def fetch_chart(symbol: str, range_value: str = "1mo", interval: str = "1d") -> 
 
 
 def search_symbols(query: str) -> List[Dict[str, Any]]:
+    # Try yfinance first (handles Yahoo auth cookies automatically)
+    if yf is not None:
+        try:
+            yf_results = fetch_search_with_yfinance(query)
+            if yf_results:
+                return yf_results
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("yfinance search fallback failed: %s", exc)
+
     url = "https://query1.finance.yahoo.com/v1/finance/search"
     params = {"q": query, "quotesCount": 10, "newsCount": 0}
     try:
         response = requests.get(url, params=params, headers=yahoo_headers(), timeout=10)
         response.raise_for_status()
     except requests.RequestException as exc:
-        if settings.use_in_memory_db:
-            return build_offline_search(query)
-        raise HTTPException(status_code=502, detail=f"Search service error: {exc}") from exc
+        logger.warning("Search service error: %s", exc)
+        return build_offline_search(query)
     data = response.json()
     results = data.get("quotes") or []
     output: List[Dict[str, Any]] = []
@@ -1440,30 +1448,55 @@ def fetch_quotes_with_yfinance(symbols: List[str]) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     timestamp = now().isoformat()
     for symbol in symbols:
-        ticker = yf.Ticker(symbol)
-        info = getattr(ticker, "fast_info", {}) or {}
-        price = info.get("last_price") or info.get("last_close") or info.get("previous_close")
-        previous = info.get("previous_close") or price
-        if price is None:
-            history = ticker.history(period="5d", interval="1d")
-            if not history.empty:
-                price = float(history["Close"].iloc[-1])
-                previous = float(history["Close"].iloc[-2]) if len(history) > 1 else price
-        if price is None:
+        try:
+            ticker = yf.Ticker(symbol)
+            info = getattr(ticker, "fast_info", None)
+            price = None
+            previous = None
+            currency = None
+            if info is not None:
+                try:
+                    price = getattr(info, "last_price", None)
+                except Exception:
+                    pass
+                if price is None:
+                    try:
+                        price = getattr(info, "last_close", None)
+                    except Exception:
+                        pass
+                try:
+                    previous = getattr(info, "previous_close", None)
+                except Exception:
+                    pass
+                try:
+                    currency = getattr(info, "currency", None)
+                except Exception:
+                    pass
+            if price is None:
+                history = ticker.history(period="5d", interval="1d")
+                if not history.empty:
+                    price = float(history["Close"].iloc[-1])
+                    previous = float(history["Close"].iloc[-2]) if len(history) > 1 else price
+            if price is None:
+                continue
+            if previous is None:
+                previous = price
+            change = price - previous if previous else 0.0
+            change_percent = (change / previous) * 100 if previous else 0.0
+            results.append(
+                {
+                    "symbol": symbol.upper(),
+                    "price": float(price),
+                    "change": float(change),
+                    "changePercent": float(change_percent),
+                    "previousClose": float(previous) if previous is not None else None,
+                    "currency": currency,
+                    "updated": timestamp,
+                }
+            )
+        except Exception as exc:
+            logger.warning("yfinance quote for %s failed: %s", symbol, exc)
             continue
-        change = price - previous if previous else 0.0
-        change_percent = (change / previous) * 100 if previous else 0.0
-        results.append(
-            {
-                "symbol": symbol.upper(),
-                "price": float(price),
-                "change": float(change),
-                "changePercent": float(change_percent),
-                "previousClose": float(previous) if previous is not None else None,
-                "currency": info.get("currency"),
-                "updated": timestamp,
-            }
-        )
     return results
 
 
@@ -1501,7 +1534,10 @@ def fetch_chart_with_yfinance(symbol: str, range_value: str, interval: str) -> D
     currency = None
     info = getattr(ticker, "fast_info", None)
     if info:
-        currency = info.get("currency")
+        try:
+            currency = getattr(info, "currency", None)
+        except Exception:
+            pass
     return {
         "symbol": symbol.upper(),
         "points": points,
@@ -1517,23 +1553,29 @@ def fetch_search_with_yfinance(query: str) -> List[Dict[str, Any]]:
     if yf is None:
         return []
     try:
-        items = yf.search(query)
+        search_result = yf.search(query)
     except Exception as exc:  # noqa: BLE001
         logger.warning("yfinance search raised: %s", exc)
-        items = []
+        search_result = None
+    items: list = []
+    if isinstance(search_result, dict):
+        items = search_result.get("quotes", [])
+    elif isinstance(search_result, list):
+        items = search_result
     matches: List[Dict[str, Any]] = []
-    if isinstance(items, list):
-        for item in items[:10]:
-            symbol = item.get('symbol')
-            if not symbol:
-                continue
-            matches.append({
-                'symbol': symbol,
-                'shortName': item.get('shortname') or item.get('longname'),
-                'longName': item.get('longname'),
-                'exchange': item.get('exchange'),
-                'type': item.get('quoteType'),
-            })
+    for item in items[:10]:
+        if not isinstance(item, dict):
+            continue
+        symbol = item.get('symbol')
+        if not symbol:
+            continue
+        matches.append({
+            'symbol': symbol,
+            'shortName': item.get('shortname') or item.get('shortName') or item.get('longname') or item.get('longName'),
+            'longName': item.get('longname') or item.get('longName'),
+            'exchange': item.get('exchange'),
+            'type': item.get('quoteType'),
+        })
     if matches:
         return matches
     return build_offline_search(query)

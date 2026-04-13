@@ -9,4 +9,4 @@ requests==2.32.5
 openai>=1.0.0,<2.0
 
 duckduckgo-search==5.2.2
-yfinance==0.2.48
+yfinance>=0.2.54
