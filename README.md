@@ -1,25 +1,61 @@
 # Algo Trade Simulator
 
-A full-stack trading simulation platform with live market data, personalised strategy tracking, and persistent user accounts. The project now ships with a Python (FastAPI) backend and a React frontend so you can spin up the experience locally with minimal setup.
+A full-stack trading simulation platform that lets you research live markets, train and backtest algorithmic strategies, and manage simulated portfolios — all without risking real capital. The app pairs a FastAPI backend with a React + Vite frontend, sources market data from Yahoo Finance, and uses an OpenAI-backed copilot (with heuristic fallbacks) to assist with research and automation.
 
-## Features
+## What the project does
 
-- **Live market data** sourced on demand from Yahoo Finance with resilient quote/chart fallbacks
-- **Live market lab** page with ticker search, candlestick overlays, and intraday stats powered by Yahoo Finance
-- **AI-assisted strategy lab** that trains and backtests SMA crossovers on 5-year history and generates live signals
-- **Hybrid chatbot copilot** backed by OpenAI GPT models with heuristic fallbacks for research and automation, now including budget-aware, diversified allocation suggestions for short horizons
-- **Simulation workspace** for creating, updating, and tracking algorithmic trading experiments
-- **Home analytics dashboard** surfacing portfolio stats, trained strategies, and recent results
-- **Session recovery** using browser storage so signed-in users can resume quickly
+- Streams live quotes, charts, and intraday stats from Yahoo Finance for any searchable ticker.
+- Trains an SMA crossover strategy on five years of historical data and serves live signals against the latest market regime.
+- Persists user accounts, sessions, and simulations in MongoDB (or an in-memory store for quick local runs).
+- Provides a hybrid chatbot copilot that can answer research questions and spin up simulations from natural-language prompts (e.g. "create a simulation for AAPL with 25k").
+- Surfaces portfolio stats, trained strategies, and recent results through a home analytics dashboard.
+- Restores sessions via browser storage so signed-in users can resume where they left off.
 
 ## Tech stack
 
-| Area     | Technology |
-|----------|------------|
-| Frontend | React + Vite + TypeScript |
-| Backend  | FastAPI, Motor (MongoDB), Passlib |
-| Database | MongoDB |
-| Market data | Yahoo Finance quote & chart APIs (via requests) |
+| Area        | Technology |
+|-------------|------------|
+| Frontend    | React + Vite + TypeScript |
+| Backend     | FastAPI, Motor (async MongoDB), Passlib |
+| Database    | MongoDB (Atlas or local) — optional in-memory fallback |
+| Market data | Yahoo Finance quote & chart APIs (via `requests`) |
+| AI copilot  | OpenAI Chat Completions with configurable model fallbacks |
+
+## Project structure
+
+```
+Algo-Trade-Simulator/
+├── backend/                 # FastAPI service
+│   ├── main.py              # App entrypoint, routes, services, DB wiring
+│   ├── requirements.txt     # Python dependencies
+│   ├── test.py              # MongoDB connectivity check
+│   └── ctest.py             # Auxiliary connectivity / sanity script
+├── client/                  # React + Vite frontend
+│   ├── index.html
+│   └── src/
+│       ├── main.tsx         # Vite entrypoint
+│       ├── App.tsx          # Top-level routing & layout
+│       ├── api.ts           # Backend API client
+│       ├── types.ts         # Shared TypeScript types
+│       ├── index.css
+│       └── components/
+│           ├── HomeOverview.tsx
+│           ├── Dashboard.tsx
+│           ├── LiveMarketPage.tsx
+│           ├── Watchlist.tsx
+│           ├── SparklineChart.tsx
+│           ├── StrategyCatalog.tsx
+│           ├── StrategyTrainer.tsx
+│           ├── SimulationForm.tsx
+│           ├── SimulationList.tsx
+│           ├── ChatbotPanel.tsx
+│           ├── LoginForm.tsx
+│           └── SignupForm.tsx
+├── package.json             # Frontend scripts & dependencies
+├── vite.config.ts           # Vite dev server / proxy config
+├── tsconfig.json
+└── README.md
+```
 
 ## Getting started
 
@@ -27,7 +63,7 @@ A full-stack trading simulation platform with live market data, personalised str
 
 - Node.js 18 or later
 - Python 3.11 or later
-- A running MongoDB instance (Atlas or local)
+- A running MongoDB instance (Atlas or local) — optional if you use the in-memory mode
 
 ### Backend setup
 
@@ -35,21 +71,21 @@ A full-stack trading simulation platform with live market data, personalised str
    ```bash
    cd backend
    python -m venv .venv
-   source .venv/bin/activate  # On Windows use `.venv\\Scripts\\activate`
+   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    pip install -r requirements.txt
    ```
-2. Configure environment variables (defaults are provided below). You can create a `.env` file in `backend/` if desired.
-3. Start the FastAPI server:
+2. (Optional) Create a `.env` file in `backend/` to override defaults — see [Configuration](#configuration).
+3. Start the FastAPI server from the repository root:
    ```bash
    uvicorn backend.main:app --reload --port 8000
    ```
    > To run without MongoDB during development, export `USE_IN_MEMORY_DB=true`. All data is ephemeral and resets on restart.
 4. (Optional) Verify MongoDB connectivity:
    ```bash
-   python test.py
+   python backend/test.py
    ```
 
-The API will be available at `http://localhost:8000` and includes automatically generated Swagger docs at `/docs`.
+The API will be available at `http://localhost:8000`, with auto-generated Swagger docs at `/docs`.
 
 ### Frontend setup
 
@@ -61,7 +97,7 @@ The API will be available at `http://localhost:8000` and includes automatically 
    ```bash
    npm run dev
    ```
-3. Open `http://localhost:5173` in your browser. The frontend proxies API requests to `http://localhost:8000` by default. You can override this by setting `VITE_API_BASE_URL` in `client/.env`.
+3. Open `http://localhost:5173`. The frontend proxies API requests to `http://localhost:8000` by default. Override with `VITE_API_BASE_URL` in `client/.env` if needed.
 
 ## Configuration
 
@@ -91,7 +127,7 @@ The backend recognises the following environment variables:
 
 ### Frontend environment
 
-The Vite frontend honours the following environment variables:
+The Vite frontend honours the following environment variables (set in `client/.env`):
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -107,33 +143,32 @@ The Vite frontend honours the following environment variables:
 
 The FastAPI server exposes REST endpoints. Key routes include:
 
-- `POST /auth/signup` – register a new user and return an access token
-- `POST /auth/login` – authenticate an existing user
-- `GET /auth/session` – validate a bearer token and retrieve the current user
-- `GET /market/watchlist` – fetch live quotes for a comma separated list of symbols
-- `GET /market/quote/{symbol}` – fetch a single market quote
-- `GET /market/search` - look up tickers and exchanges that match a user query
-- `GET /market/chart/{symbol}` - return candlestick-ready chart data with configurable range and interval
-- `GET /simulations` – list saved simulations for the authenticated user
-- `POST /simulations` – create a new simulation for the current user
-- `PATCH /simulations/{id}` – update status or notes for a simulation
-- `DELETE /simulations/{id}` – remove a simulation
-- `GET /analytics/overview` - retrieve aggregated dashboard metrics for the signed-in user
-- `GET /analytics/strategies` - list the built-in strategy catalogue shown on the info page
-- `POST /analytics/train` - backtest/train the SMA crossover strategy on the last five years of data
-- `POST /analytics/predict` - generate a live signal using the last trained strategy
-- `GET /analytics/sparkline` - return sparkline-friendly price series for requested symbols
-- `POST /chat` - query the hybrid chatbot backed by OpenAI completions
+- `POST /auth/signup` — register a new user and return an access token
+- `POST /auth/login` — authenticate an existing user
+- `GET /auth/session` — validate a bearer token and retrieve the current user
+- `GET /market/watchlist` — fetch live quotes for a comma-separated list of symbols
+- `GET /market/quote/{symbol}` — fetch a single market quote
+- `GET /market/search` — look up tickers and exchanges that match a user query
+- `GET /market/chart/{symbol}` — return candlestick-ready chart data with configurable range and interval
+- `GET /simulations` — list saved simulations for the authenticated user
+- `POST /simulations` — create a new simulation for the current user
+- `PATCH /simulations/{id}` — update status or notes for a simulation
+- `DELETE /simulations/{id}` — remove a simulation
+- `GET /analytics/overview` — retrieve aggregated dashboard metrics for the signed-in user
+- `GET /analytics/strategies` — list the built-in strategy catalogue shown on the info page
+- `POST /analytics/train` — backtest/train the SMA crossover strategy on the last five years of data
+- `POST /analytics/predict` — generate a live signal using the last trained strategy
+- `GET /analytics/sparkline` — return sparkline-friendly price series for requested symbols
+- `POST /chat` — query the hybrid chatbot backed by OpenAI completions
+
+Requests that require authentication expect an `Authorization: Bearer <token>` header. Tokens automatically expire after seven days.
 
 ## Strategy lab & chatbot
 
-1. Ensure the backend can reach Yahoo Finance (no VPN/proxy required) and that the `OPENAI_API_KEY` environment variable is set for the backend service. Optionally add `OPENAI_MODEL_FALLBACKS` (e.g. `gpt-4o,gpt-3.5-turbo`) so the assistant can fall back when a model hits account limits.
+1. Ensure the backend can reach Yahoo Finance (no VPN/proxy required) and that `OPENAI_API_KEY` is set for the backend service. Optionally add `OPENAI_MODEL_FALLBACKS` (e.g. `gpt-4o,gpt-3.5-turbo`) so the assistant can fall back when a model hits account limits.
 2. Train a strategy from the **Simulations** page or via `POST /analytics/train` with a symbol plus short/long SMA windows (default 20/60).
 3. Request a fresh prediction from the **Home** page or `POST /analytics/predict` to evaluate the current market regime.
 4. Use the **Chatbot** page to ask questions, run quick research, or say "create a simulation for AAPL with 25k" to auto-spin a test scenario.
-
-
-Requests that require authentication expect an `Authorization: Bearer <token>` header. Tokens automatically expire after seven days.
 
 ## Development tips
 
