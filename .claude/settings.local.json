@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(.venv/Scripts/pip install:*)",
-      "Bash(.venv/Scripts/python -c ':*)",
-      "Bash(ls D:/Code/sides/Algo-Trade-Simulator/client/src/*/)"
-    ]
-  }
-}
