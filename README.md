@@ -1,6 +1,6 @@
 # Algo Trade Simulator
 
-A full-stack trading simulation platform that lets you research live markets, train and backtest algorithmic strategies, and manage simulated portfolios — all without risking real capital. The app pairs a FastAPI backend with a React + Vite frontend, sources market data from Yahoo Finance, and uses an OpenAI-backed copilot (with heuristic fallbacks) to assist with research and automation.
+A full-stack algorithmic trading simulation platform that lets you research live markets, train and backtest algorithmic strategies, and manage simulated portfolios — all without risking real capital. The app pairs a FastAPI backend with a React + Vite frontend, sources market data from Yahoo Finance, and uses an OpenAI-backed copilot (with heuristic fallbacks) to assist with research and automation.
 
 ## What the project does
 
