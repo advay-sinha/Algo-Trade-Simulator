@@ -139,7 +139,7 @@ All routes are prefixed with `/api`.
 | 6 | Copilot 2.0 — tool-calling assistant that runs backtests, trains models, explains results | Done |
 | 7 | NLP research memory — FinBERT sentiment, embeddings stored on MongoDB documents, user-scoped retrieval (NumPy or Atlas Vector Search), copilot citations | Done |
 | 8 | Production hardening — route modules, API + unit tests, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
-| 9 | Cloud deployment — one Vercel project: static frontend + FastAPI as a Python function (`api/index.py`) under `/api`, MongoDB Atlas, deployment smoke test | Ready to deploy |
+| 9 | Cloud deployment — one Vercel project: static frontend + FastAPI as a Python function (`api/index.py`) under `/api`, region `bom1` next to MongoDB Atlas, deployment smoke test | Done — live at algo-trade-simulator-lovat.vercel.app |
 
 Build order rationale: make the finance core credible first (backtesting → risk), then ML workflows, then LLM/NLP as supporting intelligence layers, then packaging and deployment. The interactive console comes early so every engine ships its UI into one consistent design system.
 

@@ -2,7 +2,9 @@
 
 A full-stack quantitative research and trading simulation platform for developing, testing, and monitoring algorithmic trading strategies without risking real capital. The system pairs a FastAPI backend with a React + Vite + TypeScript frontend, sources live market data from Yahoo Finance, persists research in MongoDB, and includes a research chat copilot.
 
-The project is evolving from a trading simulator into a modular quant research platform — see the [Roadmap](#roadmap) for what is implemented today versus planned.
+**Live:** [algo-trade-simulator-lovat.vercel.app](https://algo-trade-simulator-lovat.vercel.app) (paper trading only; sign up with any email).
+
+The project evolved from a trading simulator into a modular quant research platform — see the [Roadmap](#roadmap) for what each phase delivered.
 
 ## Current features
 
@@ -299,7 +301,7 @@ Development proceeds in phases; each phase ships working, verifiable functionali
 | 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Done |
 | 7 | NLP research memory | FinBERT sentiment, embedding-based retrieval over notes and backtest/model summaries, copilot answers that cite your notes (hosted Hugging Face inference) | Done |
 | 8 | Production hardening | Route modules, API + unit test suite, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
-| 9 | Cloud deployment | One Vercel project: static frontend + FastAPI as a Python function under `/api`, MongoDB Atlas, deployment smoke test | Ready to deploy |
+| 9 | Cloud deployment | One Vercel project: static frontend + FastAPI as a Python function under `/api` (Mumbai region, next to MongoDB Atlas), deployment smoke test | Done |
 
 
 ## Methodology notes
