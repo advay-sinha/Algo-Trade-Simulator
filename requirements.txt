@@ -1,0 +1,3 @@
+# Python dependencies for the Vercel function (api/index.py). The canonical list lives in
+# backend/requirements.txt; keep this file as a pointer.
+-r backend/requirements.txt

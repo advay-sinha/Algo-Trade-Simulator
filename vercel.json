@@ -4,7 +4,14 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{node_modules/**,client/**,dist/**,.venv/**,backend/venv/**,backend/.venv/**,backend/tests/**,scripts/**,deploy/**,.github/**,**/__pycache__/**,**/*.docx,*.md}"
+    }
+  },
   "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [

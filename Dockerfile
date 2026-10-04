@@ -1,5 +1,6 @@
-# Backend API image (FastAPI + uvicorn). Production host: a Hugging Face Docker Space (also runs on
-# Render, Koyeb, or any container host). $PORT (default 8000) matches the Space's app_port.
+# Backend API image (FastAPI + uvicorn) for container hosts (Render, Koyeb, Fly.io, Cloud Run, Docker
+# Compose). The main deployment runs the same app as a Vercel Python function (api/index.py).
+# The host sets $PORT (default 8000).
 FROM python:3.12-slim
 
 # APP_ENV=production: strict database mode, JSON logs, dev endpoints hard-off, proxy-aware client IPs.
@@ -17,7 +18,6 @@ RUN pip install -r backend/requirements.txt
 
 COPY backend backend
 
-# UID 1000: Hugging Face Spaces run containers as this user.
 RUN useradd --create-home --uid 1000 appuser && chown -R appuser /app
 USER appuser
 

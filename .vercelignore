@@ -1,12 +1,13 @@
-# Vercel serves only the frontend build; the API runs in a Hugging Face Space.
+# Not needed for the Vercel build (frontend) or the Python function (api/ + backend/).
 .venv
-backend
-scripts
+backend/venv
+backend/.venv
+backend/tests
+**/__pycache__
 deploy
 Dockerfile
 Dockerfile.client
 docker-compose.yml
-**/__pycache__
 .claude
 CLAUDE.md
 AGENTS.md

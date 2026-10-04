@@ -1,8 +1,8 @@
 """Smoke-test a deployed instance end to end through its public URL.
 
 Usage:
-  python scripts/smoke_deploy.py https://your-app.vercel.app        # through the Vercel rewrite
-  python scripts/smoke_deploy.py https://user-space.hf.space        # the API directly
+  python scripts/smoke_deploy.py https://your-app.vercel.app
+  python scripts/smoke_deploy.py http://127.0.0.1:8000             # a local backend
 
 Creates a throwaway account (smoke-<random>@example.com) plus one backtest, and cleans up the
 simulation and note it creates. Sentiment, research memory, and copilot steps run only when the
@@ -48,7 +48,7 @@ def main() -> int:
         return response
 
     def health() -> str:
-        # Free instances sleep when idle; the first request may wait for a cold start.
+        # The first request may wait for a cold start.
         for _ in range(12):
             try:
                 response = session.get(f"{base}/health", timeout=30)
