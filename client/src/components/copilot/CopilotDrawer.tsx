@@ -211,7 +211,7 @@ export function CopilotDrawer({
       <div className="stack-lg">
         {configured === false ? (
           <Notice tone="warn" icon="alert">
-            The copilot isn't configured on this server yet. An administrator needs to add a valid OpenAI API key.
+            The copilot isn't configured on this server yet. An administrator needs to set up a language-model provider — a free Groq key or a local Ollama both work.
           </Notice>
         ) : null}
         {turns.length === 0 ? (

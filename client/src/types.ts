@@ -191,6 +191,7 @@ export interface SystemStatus {
   strictDb: boolean;
   devEndpoints: boolean;
   copilotConfigured: boolean;
+  copilotProvider?: { provider: string; model: string } | null;
   experimentTracking?: boolean;
   offlineMarketDataAllowed: boolean;
   marketData: {

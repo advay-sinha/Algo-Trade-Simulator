@@ -374,7 +374,7 @@ export const ENGINES: EngineInfo[] = [
     features: [
       { id: "guardrails", label: "Guardrails", hoverText: "Tools run as you and only see your data, inputs are validated like the forms, at most 5 tool calls per message, and every saved action is echoed back." },
       { id: "injection", label: "Prompt-injection posture", hoverText: "It never fetches URLs or files, and treats tool results and quoted text as data, not instructions." },
-      { id: "config", label: "Needs configuration", hoverText: "The server needs a valid OpenAI key; without one the copilot says it isn't configured instead of failing silently." },
+      { id: "config", label: "Model provider", hoverText: "Runs on any OpenAI-compatible provider, including free ones: Groq (hosted open-weight Llama/Qwen models) or Ollama (fully local, open source). Without one, it says it isn't configured." },
     ],
     terms: ["signal"],
     status: "live",

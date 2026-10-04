@@ -293,7 +293,7 @@ function CopilotWorkbench() {
     <div className="stack">
       {status?.copilotConfigured === false ? (
         <Notice tone="warn" icon="alert">
-          This server has no working OpenAI key configured, so the copilot can't answer yet.
+          No language-model provider is configured on this server yet (a free Groq key or a local Ollama works), so the copilot can't answer.
         </Notice>
       ) : null}
       <div>

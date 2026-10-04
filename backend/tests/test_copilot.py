@@ -153,8 +153,8 @@ def test_provider_errors_are_masked():
 
 
 def test_unconfigured_server_explains_itself():
-    saved = settings.openai_api_key
-    settings.openai_api_key = None
+    saved = copilot_service.resolve_llm
+    copilot_service.resolve_llm = lambda: None
     try:
 
         async def collect():
@@ -162,7 +162,7 @@ def test_unconfigured_server_explains_itself():
 
         events = asyncio.run(collect())
     finally:
-        settings.openai_api_key = saved
+        copilot_service.resolve_llm = saved
     assert events[0] == {"type": "message", "content": copilot_service.NOT_CONFIGURED}
 
 

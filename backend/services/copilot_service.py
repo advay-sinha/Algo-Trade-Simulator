@@ -11,8 +11,8 @@ from backend.config import settings
 
 logger = logging.getLogger("algo_trade_backend.copilot")
 
-NOT_CONFIGURED = "The copilot isn't configured on this server yet. An administrator needs to add an OpenAI API key."
-AUTH_FAILED = "The copilot can't sign in to the AI provider right now. An administrator needs to check the OpenAI API key."
+NOT_CONFIGURED = "The copilot isn't configured on this server yet. An administrator needs to set up a language-model provider (a free Groq key or a local Ollama works)."
+AUTH_FAILED = "The copilot can't sign in to its language-model provider right now. An administrator needs to check the provider API key."
 RATE_LIMITED = "The AI provider is rate limiting requests. Wait a moment and try again."
 GENERIC_FAILURE = "The copilot ran into a problem answering that. Try again in a moment."
 
@@ -21,31 +21,49 @@ def langchain_available() -> bool:
     return importlib.util.find_spec("langchain_openai") is not None and importlib.util.find_spec("langchain_core") is not None
 
 
+def resolve_llm():
+    from backend.llm.providers import resolve
+
+    return resolve()
+
+
 def configured() -> bool:
-    return bool(settings.openai_api_key) and langchain_available()
+    return resolve_llm() is not None and langchain_available()
+
+
+def provider_info() -> Optional[Dict[str, str]]:
+    config = resolve_llm()
+    return config.public() if config else None
 
 
 def _models() -> List[str]:
+    config = resolve_llm()
+    if config is None:
+        return []
     seen: List[str] = []
-    for name in [settings.openai_model, *settings.openai_model_fallbacks]:
+    for name in [config.model, *config.fallbacks]:
         if name and name not in seen:
             seen.append(name)
     return seen
 
 
 def make_llm(model: str) -> Any:
+    """OpenAI-compatible chat client for whichever provider is configured (Groq, Ollama, ...)."""
     from langchain_openai import ChatOpenAI
 
+    config = resolve_llm()
+    if config is None:
+        raise RuntimeError("No language-model provider configured")
     kwargs: Dict[str, Any] = {
         "model": model,
-        "api_key": settings.openai_api_key,
+        "api_key": config.api_key,
         "temperature": settings.openai_temperature,
-        "timeout": 30,
+        "timeout": 60 if config.provider == "ollama" else 30,
         "max_retries": 1,
     }
-    if settings.openai_base_url:
-        kwargs["base_url"] = settings.openai_base_url
-    if settings.openai_organization:
+    if config.base_url:
+        kwargs["base_url"] = config.base_url
+    if config.provider == "openai" and settings.openai_organization:
         kwargs["organization"] = settings.openai_organization
     return ChatOpenAI(**kwargs)
 
@@ -59,7 +77,7 @@ class _FallbackModel:
 
     async def ainvoke(self, messages: Any) -> Any:
         last: Optional[Exception] = None
-        for model in _models():
+        for model in _models() or ["default"]:
             llm = self.factory(model)
             if self.tools:
                 llm = llm.bind_tools(list(self.tools))

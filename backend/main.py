@@ -1396,6 +1396,7 @@ async def system_status(
         "strictDb": settings.strict_db,
         "devEndpoints": dev_endpoints_enabled(),
         "copilotConfigured": copilot_service.configured(),
+        "copilotProvider": copilot_service.provider_info(),
         "experimentTracking": experiment_tracking.enabled(),
         "offlineMarketDataAllowed": settings.allow_offline_market_data,
         "marketData": dict(MARKET_HEALTH),
