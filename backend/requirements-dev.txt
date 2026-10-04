@@ -1,3 +1,4 @@
 # Development / test dependencies (never deployed).
-pytest>=8.0
-httpx>=0.27
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1

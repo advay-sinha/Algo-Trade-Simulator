@@ -1,0 +1,6 @@
+# Optional local NLP stack for offline development (never deployed — far too large for
+# serverless bundles). Deployed builds use hosted inference instead.
+-r requirements.txt
+torch
+transformers
+sentence-transformers

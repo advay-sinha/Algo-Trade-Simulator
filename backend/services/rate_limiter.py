@@ -15,6 +15,7 @@ from typing import Callable, Dict, Protocol, Tuple
 from fastapi import HTTPException, Request, status
 
 from backend.config import ON_VERCEL, settings
+from backend.services import upstash
 
 logger = logging.getLogger("algo_trade_backend.rate_limit")
 
@@ -46,17 +47,47 @@ class MemoryRateLimitStorage:
             self._windows.pop(key, None)
 
 
+class UpstashRateLimitStorage:
+    """Shared counters (one key per client per window) so limits hold across instances.
+    Fails open: if Redis is unreachable, requests are allowed and a warning is logged."""
+
+    def hit(self, key: str, window_seconds: int) -> Tuple[int, float]:
+        current = time.time()
+        bucket = int(current // window_seconds)
+        reset_in = window_seconds - (current % window_seconds)
+        try:
+            count, _ = upstash.pipeline([["INCR", f"rl:{key}:{bucket}"], ["EXPIRE", f"rl:{key}:{bucket}", window_seconds + 1]])
+            return int(count), reset_in
+        except Exception:  # noqa: BLE001
+            logger.warning("Shared rate-limit storage unavailable; allowing request")
+            return 0, reset_in
+
+
 def build_storage(uri: str) -> RateLimitStorage:
-    if not uri.startswith("memory://"):
-        logger.warning(
-            "RATE_LIMIT_STORAGE_URI scheme is not supported yet; using per-process memory storage",
-        )
+    """RATE_LIMIT_STORAGE_URI: "memory://" forces per-process; "upstash" (or empty = auto) uses
+    Upstash Redis when its REST credentials are present."""
+    choice = (uri or "").strip().lower()
+    if choice != "memory://" and upstash.configured():
+        logger.info("Rate limiting: shared (Upstash Redis)")
+        return UpstashRateLimitStorage()
+    if choice.startswith("upstash"):
+        logger.warning("RATE_LIMIT_STORAGE_URI=upstash but Upstash credentials are missing; using per-process memory")
     elif ON_VERCEL:
         logger.warning("Rate limiting uses per-instance memory on serverless; limits are not shared across instances")
     return MemoryRateLimitStorage()
 
 
+def storage_kind() -> str:
+    return "shared" if isinstance(_storage, UpstashRateLimitStorage) else "memory"
+
+
 _storage: RateLimitStorage = build_storage(settings.rate_limit_storage_uri)
+
+
+def reset() -> None:
+    """Clear all counters (tests and local tooling)."""
+    global _storage
+    _storage = build_storage(settings.rate_limit_storage_uri)
 
 
 def client_ip(request: Request) -> str:

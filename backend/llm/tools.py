@@ -221,7 +221,7 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         return _round(await model_signal_for_user(ctx.store, record))
 
     async def create_simulation(symbol: str, startingCapital: float, strategy: str = "sma-crossover", notes: Optional[str] = None) -> Dict[str, Any]:
-        from backend.main import SimulationInput  # request model shared with the REST endpoint
+        from backend.models.simulation import SimulationInput  # request model shared with the REST endpoint
 
         payload = SimulationInput(symbol=symbol.upper(), strategy=strategy, startingCapital=startingCapital, notes=notes)
         record = await ctx.store.add_simulation(ctx.user_id, payload)

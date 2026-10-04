@@ -1,0 +1,584 @@
+"""Persistence: an in-memory store for development/tests and a MongoDB store for production.
+Both implement the same interface (users, sessions, simulations, training, backtests, models)."""
+
+from __future__ import annotations
+
+import asyncio
+import secrets
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from backend.config import settings
+from backend.models.simulation import SimulationInput, SimulationUpdate
+from backend.security import pwd_context
+from backend.services.auth_tokens import generate_session_token, hash_session_token
+from backend.services.clock import now
+
+import logging
+
+logger = logging.getLogger("algo_trade_backend.stores")
+
+try:
+    from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
+    from pymongo import ASCENDING, DESCENDING, ReturnDocument
+    from pymongo.errors import DuplicateKeyError
+    from bson import ObjectId  # type: ignore[attr-defined]
+except ModuleNotFoundError:  # pragma: no cover - optional dependency
+    AsyncIOMotorClient = None
+    AsyncIOMotorGridFSBucket = None
+    ASCENDING = DESCENDING = ReturnDocument = None
+    DuplicateKeyError = None
+    ObjectId = None
+
+
+def coerce_object_id(value: Any) -> Any:
+    if ObjectId is None:
+        return value
+    if isinstance(value, str):
+        try:
+            return ObjectId(value)
+        except Exception:  # pragma: no cover - defensive, InvalidId not available without bson
+            return value
+    return value
+
+
+def stringify_object_id(value: Any) -> Any:
+    if ObjectId is None:
+        return value
+    if isinstance(value, ObjectId):
+        return str(value)
+    return value
+
+
+BACKTEST_SUMMARY_FIELDS = ("id", "symbol", "strategy", "range", "period", "summary", "dataSource", "createdAt")
+RISK_HEADLINE_FIELDS = ("sharpe", "sortino", "cagr", "volatility", "winRate")
+
+
+def model_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    classification = record.get("classification") or {}
+    strategy_summary = (record.get("strategy") or {}).get("summary") or {}
+    strategy_metrics = (record.get("strategy") or {}).get("metrics") or {}
+    return {
+        "id": record.get("id"),
+        "symbol": record.get("symbol"),
+        "modelType": record.get("modelType"),
+        "modelName": record.get("modelName"),
+        "label": record.get("label"),
+        "range": record.get("range"),
+        "trainedAt": record.get("trainedAt"),
+        "dataSource": record.get("dataSource"),
+        "artifactBytes": record.get("artifactBytes"),
+        "accuracy": classification.get("accuracy"),
+        "baselineAccuracy": classification.get("baselineAccuracy"),
+        "rocAuc": classification.get("rocAuc"),
+        "strategyReturn": strategy_summary.get("totalReturn"),
+        "buyHoldReturn": strategy_summary.get("buyHoldReturn"),
+        "strategySharpe": strategy_metrics.get("sharpe"),
+        "tracking": record.get("tracking"),
+    }
+
+
+def backtest_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    summary = {key: record.get(key) for key in BACKTEST_SUMMARY_FIELDS}
+    metrics = (record.get("risk") or {}).get("metrics") or {}
+    summary["riskHeadline"] = {key: metrics.get(key) for key in RISK_HEADLINE_FIELDS} if metrics else None
+    return summary
+
+
+class InMemoryStore:
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.users_by_email: Dict[str, Dict[str, Any]] = {}
+        self.users_by_id: Dict[str, Dict[str, Any]] = {}
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+        self.simulations: Dict[str, Dict[str, Any]] = {}
+        self.trained: Dict[str, Dict[str, Any]] = {}
+        self.backtests: Dict[str, Dict[str, Any]] = {}
+        self.models: Dict[str, Dict[str, Any]] = {}
+        self.artifacts: Dict[str, bytes] = {}
+
+    async def create_user(self, email: str, name: str, password: str) -> Dict[str, Any]:
+        async with self.lock:
+            if email.lower() in self.users_by_email:
+                raise ValueError("Email already registered")
+            user_id = uuid.uuid4().hex
+            record = {
+                "id": user_id,
+                "email": email.lower(),
+                "name": name,
+                "password_hash": pwd_context.hash(password),
+                "createdAt": now().isoformat(),
+            }
+            self.users_by_email[email.lower()] = record
+            self.users_by_id[user_id] = record
+            return {"id": record["id"], "email": record["email"], "name": record["name"]}
+
+    async def get_user_by_credentials(self, email: str, password: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.users_by_email.get(email.lower())
+            if not record:
+                return None
+            if not pwd_context.verify(password, record["password_hash"]):
+                return None
+            return {"id": record["id"], "email": record["email"], "name": record["name"]}
+
+    async def ensure_user(self, email: str, name: str) -> Dict[str, Any]:
+        async with self.lock:
+            record = self.users_by_email.get(email.lower())
+            if record:
+                return {"id": record["id"], "email": record["email"], "name": record["name"]}
+            user_id = uuid.uuid4().hex
+            password = secrets.token_urlsafe(12)
+            record = {
+                "id": user_id,
+                "email": email.lower(),
+                "name": name,
+                "password_hash": pwd_context.hash(password),
+                "createdAt": now().isoformat(),
+            }
+            self.users_by_email[email.lower()] = record
+            self.users_by_id[user_id] = record
+            return {"id": record["id"], "email": record["email"], "name": record["name"]}
+
+    async def create_session(self, user_id: str) -> Dict[str, Any]:
+        async with self.lock:
+            token = generate_session_token()
+            expiry = now() + timedelta(days=settings.session_duration_days)
+            self.sessions[hash_session_token(token)] = {"user_id": user_id, "expires_at": expiry}
+            return {"token": token, "expires_at": expiry}
+
+    async def delete_session(self, token: str) -> None:
+        async with self.lock:
+            self.sessions.pop(hash_session_token(token), None)
+
+    async def resolve_token(self, token: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            token_hash = hash_session_token(token)
+            session = self.sessions.get(token_hash)
+            if not session:
+                return None
+            if session["expires_at"] <= now():
+                self.sessions.pop(token_hash, None)
+                return None
+            user = self.users_by_id.get(session["user_id"])
+            if not user:
+                return None
+            return {"id": user["id"], "email": user["email"], "name": user["name"]}
+
+    async def list_simulations(self, user_id: str) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [record for record in self.simulations.values() if record["userId"] == user_id]
+        # Newest first, matching MongoStore's sort (store parity).
+        return sorted(records, key=lambda record: record["createdAt"], reverse=True)
+
+    async def add_simulation(
+        self,
+        user_id: str,
+        payload: SimulationInput,
+    ) -> Dict[str, Any]:
+        async with self.lock:
+            sim_id = uuid.uuid4().hex
+            record = {
+                "id": sim_id,
+                "userId": user_id,
+                "symbol": payload.symbol.upper(),
+                "strategy": payload.strategy,
+                "startingCapital": float(payload.startingCapital),
+                "status": "active",
+                "notes": payload.notes,
+                "createdAt": now().isoformat(),
+            }
+            self.simulations[sim_id] = record
+            return record
+
+    async def update_simulation(self, user_id: str, sim_id: str, payload: SimulationUpdate) -> Dict[str, Any]:
+        async with self.lock:
+            record = self.simulations.get(sim_id)
+            if not record or record["userId"] != user_id:
+                raise KeyError("Simulation not found")
+            if payload.status is not None:
+                record["status"] = payload.status
+            if payload.notes is not None:
+                record["notes"] = payload.notes
+            return record
+
+    async def delete_simulation(self, user_id: str, sim_id: str) -> None:
+        async with self.lock:
+            record = self.simulations.get(sim_id)
+            if not record or record["userId"] != user_id:
+                raise KeyError("Simulation not found")
+            self.simulations.pop(sim_id, None)
+
+    async def record_training(self, user_id: str, symbol: str, strategy_id: str, payload: Dict[str, Any]) -> None:
+        async with self.lock:
+            key = f"{user_id}:{symbol.upper()}"
+            self.trained[key] = {
+                "symbol": symbol.upper(),
+                "strategy_id": strategy_id,
+                "user_id": user_id,
+                "payload": payload,
+                "trained_at": now().isoformat(),
+            }
+
+    async def get_training(self, user_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            return self.trained.get(f"{user_id}:{symbol.upper()}")
+
+    async def list_trained(self, user_id: str) -> List[Dict[str, Any]]:
+        async with self.lock:
+            return [item for item in self.trained.values() if item["user_id"] == user_id]
+
+    async def add_backtest(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        async with self.lock:
+            stored = record | {"id": uuid.uuid4().hex, "userId": user_id, "createdAt": now().isoformat()}
+            self.backtests[stored["id"]] = stored
+            return stored
+
+    async def get_backtest(self, user_id: str, backtest_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.backtests.get(backtest_id)
+            return record if record and record["userId"] == user_id else None
+
+    async def list_backtests(self, user_id: str) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [backtest_summary(r) for r in self.backtests.values() if r["userId"] == user_id]
+        return sorted(records, key=lambda r: r["createdAt"], reverse=True)
+
+    async def add_model(self, user_id: str, record: Dict[str, Any], artifact: bytes) -> Dict[str, Any]:
+        async with self.lock:
+            model_id = uuid.uuid4().hex
+            self.artifacts[model_id] = artifact
+            stored = record | {"id": model_id, "userId": user_id, "artifactId": model_id}
+            self.models[model_id] = stored
+            return stored
+
+    async def get_model(self, user_id: str, model_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.models.get(model_id)
+            return record if record and record["userId"] == user_id else None
+
+    async def list_models(self, user_id: str) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [model_summary(r) for r in self.models.values() if r["userId"] == user_id]
+        return sorted(records, key=lambda r: r["trainedAt"], reverse=True)
+
+    async def latest_model(self, user_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            records = [r for r in self.models.values() if r["userId"] == user_id and r["symbol"] == symbol.upper()]
+        return max(records, key=lambda r: r["trainedAt"]) if records else None
+
+    async def get_artifact(self, record: Dict[str, Any]) -> Optional[bytes]:
+        async with self.lock:
+            return self.artifacts.get(record["artifactId"])
+
+
+class MongoStore:
+    def __init__(self, dsn: str, db_name: str) -> None:
+        if AsyncIOMotorClient is None:  # pragma: no cover - guarded by import
+            raise RuntimeError("MongoDB driver is not available")
+        # Small pool + short server selection: many serverless instances may each hold a pool,
+        # and a request must fail fast rather than hang when the cluster is unreachable.
+        self.client = AsyncIOMotorClient(
+            dsn,
+            maxPoolSize=settings.mongo_max_pool_size,
+            serverSelectionTimeoutMS=5000,
+        )
+        self.db = self.client[db_name]
+        self.users = self.db["users"]
+        self.sessions = self.db["sessions"]
+        self.simulations = self.db["simulations"]
+        self.training = self.db["training"]
+        self.backtests = self.db["backtests"]
+        self.models = self.db["models"]
+        # Model artifacts live in GridFS (never on local disk: serverless filesystems are ephemeral).
+        self.artifacts = AsyncIOMotorGridFSBucket(self.db, bucket_name="model_artifacts") if AsyncIOMotorGridFSBucket else None
+        self._indexes_ready = False
+
+    async def init(self) -> None:
+        if self._indexes_ready:
+            return
+        await self.client.admin.command("ping")
+        await self.users.create_index("email", unique=True)
+        await self.sessions.create_index("expiresAt", expireAfterSeconds=0)
+        await self.sessions.create_index("userId")
+        await self.simulations.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
+        await self.training.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1)], unique=True)
+        await self.backtests.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
+        await self.models.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1), ("trainedAt", DESCENDING or -1)])
+        # Sessions created before token hashing stored the raw token (as _id and/or a token
+        # field). Those are replayable if leaked, so invalidate them; users simply sign in again.
+        legacy = await self.sessions.delete_many(
+            {"$or": [{"token": {"$exists": True}}, {"tokenHash": {"$exists": False}}]}
+        )
+        if legacy.deleted_count:
+            logger.warning("Invalidated %d legacy plaintext sessions", legacy.deleted_count)
+        try:
+            await self.sessions.drop_index("token_1")
+        except Exception:  # noqa: BLE001 - index only exists on older databases
+            pass
+        self._indexes_ready = True
+
+    async def close(self) -> None:
+        self.client.close()
+
+    @staticmethod
+    def _public_user(document: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(document["_id"]),
+            "email": document["email"],
+            "name": document.get("name", ""),
+        }
+
+    @staticmethod
+    def _format_simulation(document: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": str(document["_id"]),
+            "userId": stringify_object_id(document.get("userId")),
+            "symbol": document["symbol"],
+            "strategy": document["strategy"],
+            "startingCapital": float(document["startingCapital"]),
+            "status": document["status"],
+            "notes": document.get("notes"),
+            "createdAt": document["createdAt"],
+        }
+
+    @staticmethod
+    def _format_training(document: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "user_id": stringify_object_id(document.get("userId")),
+            "symbol": document["symbol"],
+            "strategy_id": document["strategy_id"],
+            "payload": document["payload"],
+            "trained_at": document.get("trained_at"),
+        }
+
+    async def create_user(self, email: str, name: str, password: str) -> Dict[str, Any]:
+        email_lower = email.lower()
+        user_id = uuid.uuid4().hex
+        record = {
+            "_id": user_id,
+            "email": email_lower,
+            "name": name,
+            "password_hash": pwd_context.hash(password),
+            "createdAt": now().isoformat(),
+        }
+        try:
+            await self.users.insert_one(record)
+        except DuplicateKeyError as exc:
+            raise ValueError("Email already registered") from exc
+        return self._public_user(record)
+
+    async def get_user_by_credentials(self, email: str, password: str) -> Optional[Dict[str, Any]]:
+        email_lower = email.lower()
+        record = await self.users.find_one({"email": email_lower})
+        if not record:
+            return None
+        try:
+            if not pwd_context.verify(password, record["password_hash"]):
+                return None
+        except ValueError:
+            return None
+        return self._public_user(record)
+
+    async def ensure_user(self, email: str, name: str) -> Dict[str, Any]:
+        email_lower = email.lower()
+        record = await self.users.find_one({"email": email_lower})
+        if record:
+            return self._public_user(record)
+        password = secrets.token_urlsafe(12)
+        try:
+            return await self.create_user(email, name, password)
+        except ValueError:
+            record = await self.users.find_one({"email": email_lower})
+            if record:
+                return self._public_user(record)
+            raise
+
+    async def create_session(self, user_id: str) -> Dict[str, Any]:
+        token = generate_session_token()
+        token_hash = hash_session_token(token)
+        expiry = now() + timedelta(days=settings.session_duration_days)
+        record = {
+            "_id": token_hash,
+            "tokenHash": token_hash,
+            "userId": coerce_object_id(user_id),
+            "expiresAt": expiry,
+        }
+        await self.sessions.insert_one(record)
+        return {"token": token, "expires_at": expiry}
+
+    async def delete_session(self, token: str) -> None:
+        await self.sessions.delete_one({"_id": hash_session_token(token)})
+
+    async def resolve_token(self, token: str) -> Optional[Dict[str, Any]]:
+        record = await self.sessions.find_one({"_id": hash_session_token(token)})
+        if not record:
+            return None
+        expires_at: Optional[datetime] = record.get("expiresAt")
+        if isinstance(expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(expires_at)
+            except ValueError:
+                expires_at = None
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+            await self.sessions.update_one(
+                {"_id": record["_id"]},
+                {"$set": {"expiresAt": expires_at}},
+            )
+        if expires_at is None or expires_at <= now():
+            await self.sessions.delete_one({"_id": record["_id"]})
+            return None
+        user_id = record.get("userId")
+        user = await self.users.find_one({"_id": user_id})
+        if not user and isinstance(user_id, str):
+            alternate = coerce_object_id(user_id)
+            if alternate != user_id:
+                user = await self.users.find_one({"_id": alternate})
+        if not user:
+            await self.sessions.delete_one({"_id": record["_id"]})
+            return None
+        return self._public_user(user)
+
+    async def list_simulations(self, user_id: str) -> List[Dict[str, Any]]:
+        cursor = (
+            self.simulations.find({"userId": user_id})
+            .sort("createdAt", DESCENDING or -1)
+        )
+        results: List[Dict[str, Any]] = []
+        async for document in cursor:
+            results.append(self._format_simulation(document))
+        return results
+
+    async def add_simulation(self, user_id: str, payload: SimulationInput) -> Dict[str, Any]:
+        sim_id = uuid.uuid4().hex
+        record = {
+            "_id": sim_id,
+            "userId": user_id,
+            "symbol": payload.symbol.upper(),
+            "strategy": payload.strategy,
+            "startingCapital": float(payload.startingCapital),
+            "status": "active",
+            "notes": payload.notes,
+            "createdAt": now().isoformat(),
+        }
+        await self.simulations.insert_one(record)
+        return self._format_simulation(record)
+
+    async def update_simulation(self, user_id: str, sim_id: str, payload: SimulationUpdate) -> Dict[str, Any]:
+        updates: Dict[str, Any] = {}
+        if payload.status is not None:
+            updates["status"] = payload.status
+        if payload.notes is not None:
+            updates["notes"] = payload.notes
+        if not updates:
+            existing = await self.simulations.find_one({"_id": sim_id, "userId": user_id})
+            if not existing:
+                raise KeyError("Simulation not found")
+            return self._format_simulation(existing)
+        document = await self.simulations.find_one_and_update(
+            {"_id": sim_id, "userId": user_id},
+            {"$set": updates},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not document:
+            raise KeyError("Simulation not found")
+        return self._format_simulation(document)
+
+    async def delete_simulation(self, user_id: str, sim_id: str) -> None:
+        result = await self.simulations.delete_one({"_id": sim_id, "userId": user_id})
+        if result.deleted_count == 0:
+            raise KeyError("Simulation not found")
+
+    async def record_training(self, user_id: str, symbol: str, strategy_id: str, payload: Dict[str, Any]) -> None:
+        key = f"{user_id}:{symbol.upper()}"
+        record = {
+            "_id": key,
+            "userId": user_id,
+            "symbol": symbol.upper(),
+            "strategy_id": strategy_id,
+            "payload": payload,
+            "trained_at": now().isoformat(),
+        }
+        await self.training.update_one({"_id": key}, {"$set": record}, upsert=True)
+
+    async def get_training(self, user_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+        record = await self.training.find_one({"userId": user_id, "symbol": symbol.upper()})
+        if not record:
+            return None
+        return self._format_training(record)
+
+    async def list_trained(self, user_id: str) -> List[Dict[str, Any]]:
+        cursor = self.training.find({"userId": user_id})
+        results: List[Dict[str, Any]] = []
+        async for document in cursor:
+            results.append(self._format_training(document))
+        return results
+
+    @staticmethod
+    def _format_backtest(document: Dict[str, Any]) -> Dict[str, Any]:
+        record = {key: value for key, value in document.items() if key != "_id"}
+        record["id"] = str(document["_id"])
+        return record
+
+    async def add_backtest(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        backtest_id = uuid.uuid4().hex
+        document = record | {"_id": backtest_id, "userId": user_id, "createdAt": now().isoformat()}
+        await self.backtests.insert_one(document)
+        return self._format_backtest(document)
+
+    async def get_backtest(self, user_id: str, backtest_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.backtests.find_one({"_id": backtest_id, "userId": user_id})
+        return self._format_backtest(document) if document else None
+
+    async def list_backtests(self, user_id: str) -> List[Dict[str, Any]]:
+        projection = {"equity": 0, "drawdown": 0, "buyHold": 0, "benchmarkEquity": 0, "trades": 0, "risk.drawdown": 0, "risk.buyHold": 0, "risk.benchmark": 0}
+        cursor = self.backtests.find({"userId": user_id}, projection).sort("createdAt", DESCENDING or -1)
+        return [backtest_summary(self._format_backtest(document)) async for document in cursor]
+
+    async def add_model(self, user_id: str, record: Dict[str, Any], artifact: bytes) -> Dict[str, Any]:
+        if self.artifacts is None:  # pragma: no cover - motor always ships GridFS
+            raise RuntimeError("GridFS is unavailable")
+        model_id = uuid.uuid4().hex
+        artifact_id = await self.artifacts.upload_from_stream(f"{model_id}.joblib", artifact, metadata={"userId": user_id})
+        document = record | {"_id": model_id, "userId": user_id, "artifactId": artifact_id}
+        await self.models.insert_one(document)
+        return self._format_model(document)
+
+    @staticmethod
+    def _format_model(document: Dict[str, Any]) -> Dict[str, Any]:
+        record = {key: value for key, value in document.items() if key not in ("_id",)}
+        record["id"] = str(document["_id"])
+        record["artifactId"] = str(document.get("artifactId"))
+        return record
+
+    async def get_model(self, user_id: str, model_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.models.find_one({"_id": model_id, "userId": user_id})
+        if not document:
+            return None
+        record = self._format_model(document)
+        record["_artifactObjectId"] = document.get("artifactId")
+        return record
+
+    async def list_models(self, user_id: str) -> List[Dict[str, Any]]:
+        projection = {"strategy.equity": 0, "strategy.buyHold": 0, "strategy.trades": 0, "labelDistribution": 0}
+        cursor = self.models.find({"userId": user_id}, projection).sort("trainedAt", DESCENDING or -1)
+        return [model_summary(self._format_model(document)) async for document in cursor]
+
+    async def latest_model(self, user_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+        document = await self.models.find_one({"userId": user_id, "symbol": symbol.upper()}, sort=[("trainedAt", DESCENDING or -1)])
+        if not document:
+            return None
+        record = self._format_model(document)
+        record["_artifactObjectId"] = document.get("artifactId")
+        return record
+
+    async def get_artifact(self, record: Dict[str, Any]) -> Optional[bytes]:
+        if self.artifacts is None or record.get("_artifactObjectId") is None:
+            return None
+        stream = await self.artifacts.open_download_stream(record["_artifactObjectId"])
+        return await stream.read()
+
+
+Store = Union[InMemoryStore, MongoStore]

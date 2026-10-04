@@ -1,0 +1,38 @@
+# Local stack: frontend (nginx) + backend + MongoDB.
+#   docker compose up --build   →   http://localhost:8080
+# Secrets (LLM keys, MLflow credentials) are read from backend/.env, which is never baked into images.
+services:
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      retries: 5
+
+  backend:
+    build: .
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      USE_IN_MEMORY_DB: "false"
+      STRICT_DB: "true"
+      ENABLE_DEV_ENDPOINTS: "false"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo-data:

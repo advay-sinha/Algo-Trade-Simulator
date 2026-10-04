@@ -19,6 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 if load_dotenv is not None:
     load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
+APP_VERSION = "0.4.0"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 LOCAL_DEV_ORIGIN = "http://localhost:5173"
 
@@ -60,7 +61,7 @@ class Settings(BaseModel):
     mongo_uri: Optional[str] = Field(default_factory=lambda: os.getenv("MONGO_URI"))
     mongodb_db: str = Field(default_factory=lambda: os.getenv("MONGODB_DB", "algo-trade-simulator"))
     mongo_max_pool_size: int = Field(default_factory=lambda: env_int("MONGO_MAX_POOL_SIZE", 5))
-    rate_limit_storage_uri: str = Field(default_factory=lambda: os.getenv("RATE_LIMIT_STORAGE_URI", "memory://"))
+    rate_limit_storage_uri: str = Field(default_factory=lambda: os.getenv("RATE_LIMIT_STORAGE_URI", ""))
     auth_rate_limit_per_minute: int = Field(default_factory=lambda: env_int("AUTH_RATE_LIMIT_PER_MINUTE", 5))
     market_rate_limit_per_minute: int = Field(default_factory=lambda: env_int("MARKET_RATE_LIMIT_PER_MINUTE", 60))
     # Fallback quotes/charts are always flagged with source="offline"/"synthetic"; this switch

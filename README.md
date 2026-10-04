@@ -16,9 +16,10 @@ The project is evolving from a trading simulator into a modular quant research p
 - **Simulations** — create, track, update, and delete simulated portfolio runs per user.
 - **Accounts & sessions** — email/password signup and login, bcrypt-hashed passwords, bearer-token sessions with 7-day expiry, server-side logout, session tokens stored only as SHA-256 hashes, and per-client rate limiting on authentication.
 - **Analytics dashboard** — simulation totals, trained strategies, recent simulations, and one-month watchlist trends.
-- **Research copilot (tool-calling)** — a LangChain agent on OpenAI chat models that runs real platform tools on your behalf: quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, and simulation creation. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw.
+- **Research copilot (tool-calling)** — a LangChain agent on free open-weight models (Groq, OpenRouter, Hugging Face), a fully local Ollama model, or OpenAI, that runs real platform tools on your behalf: quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, and simulation creation. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw.
 - **Flexible persistence** — MongoDB (Atlas or local) for durable storage, or a zero-setup in-memory mode for local development; a strict mode refuses to run without the database instead of silently losing data.
 - **Input hardening** — ticker symbols, chart ranges, and simulation states are validated before any outbound request; error responses never expose internal details.
+- **Operations** — structured JSON logs with a per-request `X-Request-ID`, an optional shared Redis (Upstash) cache and rate limiter for multi-instance hosting, pinned dependencies, a CI pipeline (tests, type check, build, deployed-size budget), and Docker Compose for a one-command local stack.
 
 ## Tech stack
 
@@ -28,25 +29,31 @@ The project is evolving from a trading simulator into a modular quant research p
 | Backend | FastAPI, Pydantic, Motor (async MongoDB), Passlib |
 | Database | MongoDB — optional in-memory fallback for development |
 | Market data | Yahoo Finance via `yfinance` with raw-API and offline fallbacks |
-| Copilot | LangChain (langchain-core, langchain-openai) tool-calling over OpenAI chat models, streamed via Server-Sent Events |
+| Copilot | LangChain (langchain-core, langchain-openai) tool-calling over any OpenAI-compatible chat API — Groq, OpenRouter, Hugging Face, Ollama, OpenAI — streamed via Server-Sent Events |
+| ML | scikit-learn, pandas, NumPy; optional MLflow tracking over REST (e.g. DagsHub) |
+| Operations | Structured logging, Upstash Redis (REST) for shared cache and rate limits, GitHub Actions CI, Docker / Docker Compose |
 
 ## Project structure
 
 ```
 Algo-Trade-Simulator/
 ├── backend/                 # FastAPI service
-│   ├── main.py              # App entrypoint, routes, stores, market data
+│   ├── main.py              # App assembly: middleware and routers
+│   ├── api/                 # Route modules: auth, market, analytics, simulations, backtests, ml, copilot, system
 │   ├── config.py            # Settings, .env loading, platform detection
-│   ├── models/common.py     # Shared validated types (symbols, statuses, password policy)
-│   ├── models/backtest.py   # Backtest request model
-│   ├── services/            # Market data (cached, async), backtesting engine, rate limiting, token hashing
+│   ├── deps.py              # Store and current-user dependencies
+│   ├── stores.py            # MongoDB and in-memory stores (shared interface)
+│   ├── logging_config.py    # Structured logging and request-id middleware
+│   ├── models/              # Request/response models and shared validated types
+│   ├── services/            # Market data (cached), backtesting engine, rate limiting, Upstash client, copilot, model registry
 │   ├── strategies/          # Strategy interface + registry: buy-and-hold, SMA crossover, momentum, mean reversion
 │   ├── analytics/           # Risk metrics (metrics.py) and risk report assembly (risk.py)
 │   ├── ml/                  # Features, datasets, training, evaluation, inference
 │   ├── llm/                 # Copilot tools, prompts, tool-calling loop
-│   ├── tests/               # pytest suite (features, backtesting, metrics, ML, experiment tracking)
-│   ├── requirements-dev.txt # Test-only dependencies
-│   ├── requirements.txt     # Python dependencies
+│   ├── tests/               # pytest suite (features, backtesting, metrics, ML, tracking, copilot, API, cache/limits)
+│   ├── requirements.txt     # Deployed dependencies (pinned)
+│   ├── requirements-dev.txt # + test tools
+│   ├── requirements-local-ml.txt # Local-only heavy ML (never deployed)
 │   └── test.py              # MongoDB connectivity check
 ├── client/                  # React + Vite frontend
 │   ├── index.html
@@ -60,14 +67,18 @@ Algo-Trade-Simulator/
 │       ├── styles/          # Design tokens (light/dark) and component styles
 │       ├── pages/           # One module per route
 │       └── components/      # ui/ primitives, charts/, layout/ shell, copilot/ drawer
+├── deploy/nginx.conf        # Frontend container: static files + /api proxy
+├── scripts/                 # Maintenance scripts (deployed bundle size check)
+├── .github/workflows/       # CI
+├── Dockerfile               # Backend image
+├── Dockerfile.client        # Frontend image
+├── docker-compose.yml       # Local stack: frontend + backend + MongoDB
 ├── package.json             # Frontend scripts & dependencies
 ├── vite.config.ts
 ├── tsconfig.json
 ├── project_overview.md      # Architecture, API surface, data model, roadmap detail
 └── README.md
 ```
-
-As the roadmap progresses, the backend continues splitting into modules: `ml/` (features, training, inference, registry), `llm/` (copilot tools), `analytics/` (risk, metrics, reports), and `tests/`.
 
 ## Getting started
 
@@ -127,17 +138,26 @@ Verify connectivity with `python backend/test.py`. The database connection is cr
 
 ### When you want the chat copilot
 
-The copilot needs an OpenAI API key. Add to `backend/.env`:
+The copilot works with any OpenAI-compatible chat API that supports tool calling. Free options are built in:
+
+| Provider | Cost | Setup | Default model |
+|---|---|---|---|
+| `groq` | Free tier, no card | Create a key at console.groq.com → `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| `openrouter` | Free `:free` models | Create a key at openrouter.ai → `OPENROUTER_API_KEY` | `meta-llama/llama-3.3-70b-instruct:free` |
+| `huggingface` | Small free monthly credits | Access token from huggingface.co → `HF_TOKEN`, plus `LLM_PROVIDER=huggingface` | `Qwen/Qwen2.5-72B-Instruct` |
+| `ollama` | Free, fully local, open source | Install Ollama, `ollama pull qwen2.5:7b`, set `LLM_PROVIDER=ollama` (local development only) | `qwen2.5:7b` |
+| `openai` | Paid | Key from platform.openai.com → `OPENAI_API_KEY` | `gpt-4o-mini` |
 
 | Variable | Description | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | API key from platform.openai.com | unset (chat replies with a "not configured" notice) |
-| `OPENAI_MODEL` | Chat model identifier | `gpt-4o-mini` |
-| `OPENAI_MODEL_FALLBACKS` | Comma-separated backup models tried on rate limits | unset |
-| `OPENAI_TEMPERATURE` | Sampling temperature | `0.3` |
-| `OPENAI_BASE_URL` / `OPENAI_ORG` | Optional endpoint/organization overrides | unset |
+| `LLM_PROVIDER` | One of the providers above | first provider with a key: Groq, then OpenRouter, then OpenAI |
+| `LLM_MODEL` | Override the provider's default model | preset |
+| `LLM_MODEL_FALLBACKS` | Comma-separated backup models tried on rate limits | unset |
+| `LLM_BASE_URL` / `LLM_API_KEY` | Point at any other OpenAI-compatible endpoint | preset |
+| `OLLAMA_BASE_URL` | Ollama endpoint | `http://localhost:11434/v1` |
+| `OPENAI_TEMPERATURE` | Sampling temperature (all providers) | `0.3` |
 
-Every other feature works without this key.
+Without a provider the chat replies with a "not configured" notice; every other feature works.
 
 ### General backend options
 
@@ -150,8 +170,21 @@ Every other feature works without this key.
 | `AUTH_RATE_LIMIT_PER_MINUTE` | Signup / login attempts allowed per client per minute (each route separately) | `5` |
 | `MARKET_RATE_LIMIT_PER_MINUTE` | Watchlist / quote requests allowed per client per minute | `60` |
 | `ALLOW_OFFLINE_MARKET_DATA` | Serve clearly flagged fallback quotes/charts when the provider is unreachable; `false` returns an error instead | `true` |
-| `RATE_LIMIT_STORAGE_URI` | Rate-limit storage backend (`memory://` today; shared storage planned for multi-instance hosting) | `memory://` |
+| `RATE_LIMIT_STORAGE_URI` | `memory://` forces per-process limits; leave unset to use Upstash automatically when configured | unset (auto) |
+| `LOG_FORMAT` | `json` (one object per line) or `text` | `json` on Vercel, `text` locally |
+| `LOG_LEVEL` | Backend log level | `INFO` |
 | `YAHOO_USER_AGENT` | User-Agent for Yahoo Finance requests | preset |
+
+### When you run more than one instance (shared cache and rate limits)
+
+Serverless and multi-instance hosting don't share process memory, so the market-data cache and rate limits can use a free [Upstash](https://upstash.com) Redis database over its REST API (the `KV_REST_API_*` names set by the Vercel marketplace integration are also accepted):
+
+| Variable | Description | Default |
+|---|---|---|
+| `UPSTASH_REDIS_REST_URL` | REST URL of the database (or `KV_REST_API_URL`) | unset (per-process memory) |
+| `UPSTASH_REDIS_REST_TOKEN` | REST token (or `KV_REST_API_TOKEN`) | unset |
+
+If Redis is unreachable, requests still succeed: the cache is skipped and limits fail open, with a warning in the log.
 
 ### When you want experiment tracking (MLflow)
 
@@ -176,7 +209,7 @@ Models are always trained and saved without it; tracking is a best-effort extra.
 
 ## API overview
 
-All routes are served under the `/api` prefix. Authenticated routes expect `Authorization: Bearer <token>`; tokens are issued by signup/login, expire after 7 days (configurable), and are revoked by logout. Authentication and quote routes are rate limited per client (HTTP 429 with `Retry-After`).
+All routes are served under the `/api` prefix. Authenticated routes expect `Authorization: Bearer <token>`; tokens are issued by signup/login, expire after 7 days (configurable), and are revoked by logout. Authentication and quote routes are rate limited per client (HTTP 429 with `Retry-After`). Every response carries an `X-Request-ID` header (a valid incoming one is reused) that also appears in the server log.
 
 | Route | Purpose | Auth |
 |---|---|---|
@@ -206,7 +239,7 @@ All routes are served under the `/api` prefix. Authenticated routes expect `Auth
 | `POST /api/ml/train` | Train, evaluate on the unseen window, and register a model | ✓ |
 | `GET /api/ml/models` / `GET /api/ml/models/{id}` | Model registry list / full report | ✓ |
 | `POST /api/ml/predict` | Live signal from a registered model (by id, or latest for a symbol) | ✓ |
-| `GET /api/status` | Operational snapshot: store type, market-data source health, copilot configured, rate limits (no secrets) | ✓ |
+| `GET /api/status` | Operational snapshot: version, store type, market-data source health, copilot provider and model, experiment tracking, rate limits and whether they are shared (no secrets) | ✓ |
 | `POST /api/copilot/chat` | Copilot conversation, streamed as Server-Sent Events (tool start/end, reply, saved actions) | ✓ |
 | `POST /api/copilot/action` | Run one structured action (`run_backtest`, `train_model`, `create_simulation`) without free-text parsing | ✓ |
 | `POST /api/chat` | Non-streaming copilot reply (compatibility alias) | ✓ |
@@ -226,7 +259,7 @@ Development proceeds in phases; each phase ships working, verifiable functionali
 | 5 | ML strategies | Directional model training (scikit-learn), time-aware evaluation, model registry with database-backed artifacts, ML signals through the backtester | Done |
 | 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Done |
 | 7 | NLP research memory | Financial sentiment analysis and embedding-based retrieval over strategy notes and backtest reports (Hugging Face) | Planned |
-| 8 | Production hardening | pytest suite, CI, shared Redis cache, structured logging, dependency modernization, optional Docker Compose | Planned |
+| 8 | Production hardening | Route modules, API + unit test suite, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
 | 9 | Cloud deployment | Single-origin deployment on Vercel — static frontend + FastAPI serverless function, MongoDB Atlas, managed Redis | Planned |
 
 Planned additional endpoints as phases land (all under `/api`): `POST /research/sentiment`, `POST /research/notes`, `POST /research/rag/query`.
@@ -246,14 +279,30 @@ Strategy and model evaluation in this project follows standard quant-research di
 - `npm run build` — production frontend build.
 - `python -m py_compile backend/main.py` — quick backend syntax check.
 - `python backend/test.py` — MongoDB connectivity check.
+- `python scripts/check_bundle_size.py` — installed size of the deployed Python dependencies (warns above 250 MB, fails above 500 MB).
 - Keep this README in sync when adding scripts, endpoints, or environment variables.
-
 
 ### Tests
 
-Install the test dependencies once, then run the suite from the repository root (no database or network needed):
+Install the test dependencies once, then run the suite from the repository root (no database, network, or API keys needed — market data, language models, MLflow, and Redis are stubbed or served by local fakes):
 
 ```bash
 pip install -r backend/requirements-dev.txt
 pytest backend/tests
 ```
+
+The suite covers feature leakage, the backtesting engine, risk metrics, ML training and the registry, experiment tracking, copilot tools and providers, the HTTP API contract (auth, ownership, validation, rate limits), and the shared cache and rate limiter.
+
+### Continuous integration
+
+Every push and pull request to `main` runs three jobs: backend tests (Python 3.12), frontend type check and build (Node 20), and the deployed-bundle size check.
+
+### Docker (optional)
+
+Run the whole stack — frontend, backend, and MongoDB — with one command:
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:8080`. The frontend container serves the build and proxies `/api` to the backend (streaming responses unbuffered). Keys such as `GROQ_API_KEY` are read from `backend/.env` at runtime and never baked into images. The backend image alone (`Dockerfile`) honours `$PORT`, so it also runs on free container hosts.

@@ -1,15 +1,18 @@
+# Runtime dependencies — the only file installed in deployments.
+# Exact pins: the versions the full test suite last passed with. Bump deliberately, then re-test.
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 motor==3.6.0
+pymongo==4.9.2
 passlib[bcrypt]==1.7.4
+bcrypt==3.2.2  # passlib 1.7.4 breaks with bcrypt>=4
 pydantic[email]==2.9.0
 python-dotenv==1.0.1
-bcrypt<4.0
 requests==2.32.5
-openai>=2.0,<4
-yfinance>=0.2.54
-pandas>=2.2
-numpy>=1.26
-scikit-learn>=1.5
-langchain-core>=0.3
-langchain-openai>=0.2
+yfinance==1.2.1
+pandas==3.0.2
+numpy==2.4.4
+scikit-learn==1.9.1
+langchain-core==1.6.6
+langchain-openai==1.6.7
+openai==2.31.0

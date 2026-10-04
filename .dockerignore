@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+backend/venv
+backend/.venv
+**/__pycache__
+**/*.pyc
+node_modules
+dist
+.env
+.env.*
+backend/.env
+.claude
+CLAUDE.md
+AGENTS.md
+prompt.txt
+*.docx

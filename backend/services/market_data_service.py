@@ -10,6 +10,7 @@ Redis backend plugs in behind `CacheBackend` for multi-instance hosting.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import os
@@ -22,6 +23,7 @@ import requests
 from fastapi import HTTPException
 
 from backend.config import settings
+from backend.services import upstash
 from backend.services.clock import now
 
 logger = logging.getLogger("algo_trade_backend.market")
@@ -559,7 +561,47 @@ class MemoryTTLCache:
         self._entries[key] = (time.monotonic() + ttl_seconds, value)
 
 
-_cache: CacheBackend = MemoryTTLCache()
+class UpstashCache:
+    """Shared cache across serverless instances (JSON values with TTL). Fails open on errors."""
+
+    remote = True
+
+    def get(self, key: str) -> Optional[Any]:
+        try:
+            raw = upstash.command("GET", f"cache:{key}")
+            return json.loads(raw) if raw else None
+        except Exception:  # noqa: BLE001 - a cache outage must never break market data
+            logger.warning("Shared cache read failed; continuing without cache")
+            return None
+
+    def set(self, key: str, value: Any, ttl_seconds: float) -> None:
+        try:
+            upstash.command("SET", f"cache:{key}", json.dumps(value, default=str), "EX", max(1, int(ttl_seconds)))
+        except Exception:  # noqa: BLE001
+            logger.warning("Shared cache write failed; continuing without cache")
+
+
+def _build_cache() -> CacheBackend:
+    if upstash.configured():
+        logger.info("Market data cache: shared (Upstash Redis)")
+        return UpstashCache()
+    return MemoryTTLCache()
+
+
+_cache: CacheBackend = _build_cache()
+
+
+async def _cache_get(key: str) -> Optional[Any]:
+    if getattr(_cache, "remote", False):
+        return await asyncio.to_thread(_cache.get, key)
+    return _cache.get(key)
+
+
+async def _cache_set(key: str, value: Any, ttl_seconds: float) -> None:
+    if getattr(_cache, "remote", False):
+        await asyncio.to_thread(_cache.set, key, value, ttl_seconds)
+    else:
+        _cache.set(key, value, ttl_seconds)
 
 QUOTE_TTL_SECONDS = 15
 INTRADAY_CHART_TTL_SECONDS = 60
@@ -579,35 +621,35 @@ def _cacheable(payload: Any) -> bool:
 
 async def get_quotes(symbols: List[str]) -> List[Dict[str, Any]]:
     key = "quotes:" + ",".join(symbol.upper() for symbol in symbols)
-    cached = _cache.get(key)
+    cached = await _cache_get(key)
     if cached is not None:
         return cached
     quotes = await asyncio.to_thread(fetch_quotes, symbols)
     if _cacheable(quotes):
-        _cache.set(key, quotes, QUOTE_TTL_SECONDS)
+        await _cache_set(key, quotes, QUOTE_TTL_SECONDS)
     return quotes
 
 
 async def get_chart(symbol: str, range_value: str = "1mo", interval: str = "1d") -> Dict[str, Any]:
     key = f"chart:{symbol.upper()}:{range_value}:{interval}"
-    cached = _cache.get(key)
+    cached = await _cache_get(key)
     if cached is not None:
         return cached
     chart = await asyncio.to_thread(fetch_chart, symbol, range_value, interval)
     if _cacheable(chart):
         ttl = INTRADAY_CHART_TTL_SECONDS if interval in INTRADAY_INTERVALS else DAILY_CHART_TTL_SECONDS
-        _cache.set(key, chart, ttl)
+        await _cache_set(key, chart, ttl)
     return chart
 
 
 async def search(query: str) -> List[Dict[str, Any]]:
     key = f"search:{query.strip().lower()}"
-    cached = _cache.get(key)
+    cached = await _cache_get(key)
     if cached is not None:
         return cached
     results = await asyncio.to_thread(search_symbols, query)
     if _cacheable(results):
-        _cache.set(key, results, SEARCH_TTL_SECONDS)
+        await _cache_set(key, results, SEARCH_TTL_SECONDS)
     return results
 
 
