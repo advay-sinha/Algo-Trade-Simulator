@@ -53,7 +53,7 @@ Algo-Trade-Simulator/
 │   ├── ml/                  # Features, datasets, training, evaluation, inference
 │   ├── llm/                 # Copilot tools, prompts, tool-calling loop, provider presets, research memory (rag.py)
 │   ├── tests/               # pytest suite (features, backtesting, metrics, ML, tracking, copilot, API, cache/limits)
-│   ├── requirements.txt     # Deployed dependencies (pinned)
+│   ├── requirements.txt     # Points to the root requirements.txt
 │   ├── requirements-dev.txt # + test tools
 │   ├── requirements-local-ml.txt # Local-only heavy ML (never deployed)
 │   └── test.py              # MongoDB connectivity check
@@ -77,7 +77,7 @@ Algo-Trade-Simulator/
 ├── docker-compose.yml       # Local stack: frontend + backend + MongoDB
 ├── package.json             # Frontend scripts & dependencies
 ├── api/index.py             # Vercel Python function entrypoint (loads backend.main:app)
-├── requirements.txt         # Function dependencies (includes backend/requirements.txt)
+├── requirements.txt         # Runtime dependencies, exact pins (installed by Vercel and the Docker image)
 ├── .python-version          # Python version for the function
 ├── vercel.json              # Deployment: frontend build, /api function routing, SPA fallback, security headers
 ├── vite.config.ts
@@ -324,7 +324,7 @@ Browser ──► Vercel ─┬─ static frontend (Vite build, dist/)
                                      └── DagsHub MLflow (optional experiment tracking)
 ```
 
-`vercel.json` builds the frontend, routes every `/api/*` request to the FastAPI app in `api/index.py`, falls back to `index.html` for deep links, and sets security headers. The function installs `requirements.txt` (which includes `backend/requirements.txt`; about 320 MB installed, within Vercel's 500 MB limit for Python functions) on Python 3.12 (`.python-version`). Same origin, so no CORS configuration.
+`vercel.json` builds the frontend, routes every `/api/*` request to the FastAPI app in `api/index.py`, falls back to `index.html` for deep links, and sets security headers. The function installs the root `requirements.txt` (the canonical pinned runtime list; about 320 MB installed, within Vercel's 500 MB limit for Python functions) on Python 3.12 (`.python-version`). Same origin, so no CORS configuration.
 
 ### 1. MongoDB Atlas
 

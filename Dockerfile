@@ -13,8 +13,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install -r backend/requirements.txt
+COPY requirements.txt requirements.txt
+RUN pip install -r requirements.txt
 
 COPY backend backend
 

@@ -24,6 +24,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: |
+            requirements.txt
             backend/requirements.txt
             backend/requirements-dev.txt
       - name: Install dependencies
@@ -54,7 +55,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: python scripts/check_bundle_size.py --requirements backend/requirements.txt
+      - run: python scripts/check_bundle_size.py --requirements requirements.txt
 
   docker:
     name: Backend image builds and serves

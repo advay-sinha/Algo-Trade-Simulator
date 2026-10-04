@@ -1,10 +1,10 @@
 """Measure the installed size of the deployed Python dependencies.
 
-Installs backend/requirements.txt into a temporary directory, removes what deployments exclude
+Installs the deployed requirements.txt into a temporary directory, removes what deployments exclude
 (tests, __pycache__, .pyi stubs, dist-info), and reports the total plus the largest packages.
 Exit code 1 if the trimmed size exceeds --fail-mb (default 500); a warning above --warn-mb.
 
-Usage: python scripts/check_bundle_size.py [--requirements backend/requirements.txt]
+Usage: python scripts/check_bundle_size.py [--requirements requirements.txt]
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def prune(root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--requirements", default="backend/requirements.txt")
+    parser.add_argument("--requirements", default="requirements.txt")
     parser.add_argument("--warn-mb", type=float, default=250)
     parser.add_argument("--fail-mb", type=float, default=500)
     args = parser.parse_args()

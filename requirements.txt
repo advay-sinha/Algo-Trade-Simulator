@@ -1,3 +1,21 @@
-# Python dependencies for the Vercel function (api/index.py). The canonical list lives in
-# backend/requirements.txt; keep this file as a pointer.
--r backend/requirements.txt
+# Runtime dependencies: the only list installed in deployments (Vercel function, Docker image).
+# Exact pins: the versions the full test suite last passed with. Bump deliberately, then re-test.
+# Keep this file plain ASCII with comments on their own lines (deployment parsers are strict).
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+motor==3.6.0
+pymongo==4.9.2
+passlib[bcrypt]==1.7.4
+# passlib 1.7.4 breaks with bcrypt>=4
+bcrypt==3.2.2
+pydantic[email]==2.9.0
+python-dotenv==1.0.1
+requests==2.32.5
+yfinance==1.2.1
+pandas==3.0.2
+numpy==2.4.4
+scikit-learn==1.9.1
+langchain-core==1.6.6
+langchain-openai==1.6.7
+# langchain-openai 1.6.7 needs >=2.45
+openai==2.54.0
