@@ -2,7 +2,7 @@
 calling, so one client (langchain-openai's ChatOpenAI with a base_url) covers them all.
 
 Free options:
-- groq        — hosted open-weight models (Llama, Qwen), free tier, no card. Works in deployment.
+- groq        — hosted open-weight models (gpt-oss, Qwen), free tier, no card. Works in deployment.
 - ollama      — fully open source, runs locally (`ollama serve`). No key. Local only.
 - openrouter  — hosted, ":free" model variants. Free account key.
 - huggingface — Hugging Face router; reuses HF_TOKEN (small free monthly credits).
@@ -20,7 +20,9 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 PRESETS: Dict[str, Dict[str, Optional[str]]] = {
-    "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile", "key_env": "GROQ_API_KEY"},
+    # "fallbacks": comma-separated models tried on rate limits unless LLM_MODEL_FALLBACKS is set.
+    # Groq retires models often; check GET /openai/v1/models when a preset 404s (model_not_found).
+    "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "openai/gpt-oss-120b", "key_env": "GROQ_API_KEY", "fallbacks": "openai/gpt-oss-20b"},
     "ollama": {"base_url": "http://localhost:11434/v1", "model": "qwen2.5:7b", "key_env": None},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "model": "meta-llama/llama-3.3-70b-instruct:free", "key_env": "OPENROUTER_API_KEY"},
     "huggingface": {"base_url": "https://router.huggingface.co/v1", "model": "Qwen/Qwen2.5-72B-Instruct", "key_env": "HF_TOKEN"},
@@ -64,5 +66,8 @@ def resolve() -> Optional[LlmConfig]:
     base_url = _env("LLM_BASE_URL") or (_env("OLLAMA_BASE_URL") if provider == "ollama" else None) or preset["base_url"]
     legacy_model = _env("OPENAI_MODEL") if provider == "openai" else None
     model = _env("LLM_MODEL") or legacy_model or str(preset["model"])
-    fallbacks = tuple(item.strip() for item in (os.getenv("LLM_MODEL_FALLBACKS") or os.getenv("OPENAI_MODEL_FALLBACKS") or "").split(",") if item.strip())
+    raw_fallbacks = os.getenv("LLM_MODEL_FALLBACKS") or os.getenv("OPENAI_MODEL_FALLBACKS")
+    if raw_fallbacks is None and not _env("LLM_MODEL"):
+        raw_fallbacks = preset.get("fallbacks") or ""
+    fallbacks = tuple(item.strip() for item in (raw_fallbacks or "").split(",") if item.strip() and item.strip() != model)
     return LlmConfig(provider=provider, model=model, base_url=base_url, api_key=api_key, fallbacks=fallbacks)

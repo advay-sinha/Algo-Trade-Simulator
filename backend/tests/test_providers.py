@@ -53,3 +53,12 @@ def test_selected_provider_without_key_is_unconfigured():
 def test_public_info_never_contains_the_key():
     config = with_env({"GROQ_API_KEY": "secret-key"}, resolve)
     assert "secret-key" not in str(config.public())
+
+
+def test_groq_preset_fallbacks_apply_unless_overridden():
+    preset = with_env({"GROQ_API_KEY": "g"}, resolve)
+    assert preset.model == "openai/gpt-oss-120b" and preset.fallbacks == ("openai/gpt-oss-20b",)
+    explicit = with_env({"GROQ_API_KEY": "g", "LLM_MODEL_FALLBACKS": "a,b"}, resolve)
+    assert explicit.fallbacks == ("a", "b")
+    custom_model = with_env({"GROQ_API_KEY": "g", "LLM_MODEL": "qwen/qwen3.8-27b"}, resolve)
+    assert custom_model.fallbacks == ()
