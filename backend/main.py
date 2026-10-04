@@ -8,23 +8,52 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Union
 
-import requests
+from backend.config import (
+    IS_PRODUCTION,
+    ON_VERCEL,
+    allowed_cors_origins,
+    mask_mongo_dsn,
+    resolve_mongo_dsn,
+    settings,
+)
+from backend.models.common import (
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    SYMBOL_PATTERN,
+    ChartInterval,
+    ChartRange,
+    SimulationStatus,
+    check_password_policy,
+    parse_symbol_list,
+)
+from backend.services.auth_tokens import generate_session_token, hash_session_token
+from backend.services.clock import now
+from backend.models.backtest import BacktestRequest
+from backend.services.backtesting_service import BacktestConfig, bars_from_points, downsample, run_backtest
+from backend.strategies import REGISTRY as STRATEGY_REGISTRY, get_strategy, list_strategies
+from backend.analytics.metrics import PERIODS_PER_YEAR, sanitize, series_metrics, win_rate
+from backend.analytics.risk import build_risk_report, default_benchmark
+from backend.ml.features import catalog as feature_catalog
+from backend.models.ml import FeaturesRequest, PredictRequest, TrainModelRequest
+from backend.services import experiment_tracking
+from backend.services.model_registry_service import tracking_payload, train_and_evaluate
+from backend.services.feature_service import preview_dataset
+import pandas as pd
+from backend.services import market_data_service as market
+from backend.services.market_data_service import MARKET_HEALTH, build_offline_chart
+from backend.services.rate_limiter import rate_limit
 
 try:
-    import yfinance as yf
-except ModuleNotFoundError:
-    yf = None
-
-try:
-    from motor.motor_asyncio import AsyncIOMotorClient
+    from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
     from pymongo import ASCENDING, DESCENDING, ReturnDocument
     from pymongo.errors import DuplicateKeyError
     from bson import ObjectId  # type: ignore[attr-defined]
     from bson.errors import InvalidId  # type: ignore[attr-defined]
 except ModuleNotFoundError:  # pragma: no cover - optional dependency
     AsyncIOMotorClient = None
+    AsyncIOMotorGridFSBucket = None
     ASCENDING = DESCENDING = ReturnDocument = None
     DuplicateKeyError = None
     ObjectId = None
@@ -37,12 +66,11 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     AsyncOpenAI = None
     APIStatusError = RateLimitError = None
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Path, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
-TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 WATCHLIST_SYMBOLS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"]
 DEFAULT_STRATEGIES: List[Dict[str, Any]] = [
     {
@@ -66,6 +94,16 @@ DEFAULT_STRATEGIES: List[Dict[str, Any]] = [
         ],
     },
     {
+        "id": "momentum",
+        "name": "Time-series momentum",
+        "description": "Stay long while the trailing return over a lookback window is positive.",
+        "recommendedFor": ["trend", "momentum"],
+        "parameters": [
+            {"name": "lookback", "value": "20"},
+            {"name": "threshold", "value": "0"},
+        ],
+    },
+    {
         "id": "trend-follow",
         "name": "Trend following breakout",
         "description": "Capture breakouts by combining Donchian channels with ATR filters.",
@@ -76,104 +114,6 @@ DEFAULT_STRATEGIES: List[Dict[str, Any]] = [
         ],
     },
 ]
-
-OFFLINE_QUOTES = {
-    "AAPL": {
-        "symbol": "AAPL",
-        "price": 182.54,
-        "previousClose": 181.82,
-        "currency": "USD",
-    },
-    "MSFT": {
-        "symbol": "MSFT",
-        "price": 327.31,
-        "previousClose": 326.78,
-        "currency": "USD",
-    },
-    "GOOGL": {
-        "symbol": "GOOGL",
-        "price": 141.05,
-        "previousClose": 140.44,
-        "currency": "USD",
-    },
-    "AMZN": {
-        "symbol": "AMZN",
-        "price": 135.13,
-        "previousClose": 134.88,
-        "currency": "USD",
-    },
-    "TSLA": {
-        "symbol": "TSLA",
-        "price": 253.24,
-        "previousClose": 255.12,
-        "currency": "USD",
-    },
-    "NVDA": {
-        "symbol": "NVDA",
-        "price": 448.67,
-        "previousClose": 452.11,
-        "currency": "USD",
-    },
-    "RELIANCE.NS": {
-        "symbol": "RELIANCE.NS",
-        "price": 2461.45,
-        "previousClose": 2458.30,
-        "currency": "INR",
-    },
-}
-
-
-
-def env_flag(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).strip().lower() in TRUTHY_ENV_VALUES
-
-
-class Settings(BaseModel):
-    frontend_origin: str = Field(default_factory=lambda: os.getenv("FRONTEND_ORIGIN", "http://localhost:5173"))
-    session_duration_days: int = Field(default_factory=lambda: int(os.getenv("SESSION_DURATION_DAYS", "7")))
-    enable_dev_endpoints: bool = Field(default_factory=lambda: env_flag("ENABLE_DEV_ENDPOINTS"))
-    use_in_memory_db: bool = Field(default_factory=lambda: env_flag("USE_IN_MEMORY_DB", "false"))
-    mongo_url: Optional[str] = Field(default_factory=lambda: os.getenv("MONGO_URL"))
-    mongodb_uri: Optional[str] = Field(default_factory=lambda: os.getenv("MONGODB_URI"))
-    mongo_uri: Optional[str] = Field(default_factory=lambda: os.getenv("MONGO_URI"))
-    mongodb_db: str = Field(default_factory=lambda: os.getenv("MONGODB_DB", "algo-trade-simulator"))
-    yahoo_user_agent: str = Field(
-        default_factory=lambda: os.getenv(
-            "YAHOO_USER_AGENT",
-            "Mozilla/5.0 (compatible; AlgoTradeSimulator/1.0; +https://example.com)",
-        ),
-    )
-    openai_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    openai_model: str = Field(default_factory=lambda: os.getenv("OPENAI_MODEL", "gpt-4o-mini"))
-    openai_base_url: Optional[str] = Field(default_factory=lambda: os.getenv("OPENAI_BASE_URL"))
-    openai_organization: Optional[str] = Field(
-        default_factory=lambda: os.getenv("OPENAI_ORG") or os.getenv("OPENAI_ORGANIZATION")
-    )
-    openai_temperature: float = Field(default_factory=lambda: float(os.getenv("OPENAI_TEMPERATURE", "0.3")))
-    openai_model_fallbacks: List[str] = Field(
-        default_factory=lambda: [
-            item.strip()
-            for item in os.getenv("OPENAI_MODEL_FALLBACKS", "").split(",")
-            if item.strip()
-        ]
-    )
-
-
-def resolve_mongo_dsn(config: Settings) -> Optional[str]:
-    if config.mongo_url:
-        return config.mongo_url
-    if config.mongodb_uri:
-        return config.mongodb_uri
-    if config.mongo_uri:
-        return config.mongo_uri
-    if not config.use_in_memory_db:
-        return "mongodb://localhost:27017"
-    return None
-
-
-def mask_mongo_dsn(dsn: str) -> str:
-    return re.sub(r"//([^:@]+):([^@]+)@", "//***:***@", dsn)
-
 
 def coerce_object_id(value: Any) -> Any:
     if ObjectId is None:
@@ -194,7 +134,6 @@ def stringify_object_id(value: Any) -> Any:
     return value
 
 
-settings = Settings()
 logger = logging.getLogger("algo_trade_backend")
 
 if settings.openai_api_key and AsyncOpenAI is not None:
@@ -218,31 +157,52 @@ CHAT_SYSTEM_PROMPT = (
     "If you include external references, add a 'Sources:' section at the end with one plain URL per line."
 )
 
-app = FastAPI(title="Algo Trade Simulator API", version="0.2.0")
+app = FastAPI(
+    title="Algo Trade Simulator API",
+    version="0.3.0",
+    docs_url="/api/docs",
+    redoc_url=None,
+    openapi_url="/api/openapi.json",
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin, "http://localhost:5173"],
+    allow_origins=allowed_cors_origins(settings),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Every route lives under /api so the SPA and the API can share one origin.
+router = APIRouter(prefix="/api")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+if settings.enable_dev_endpoints:
+    if IS_PRODUCTION:
+        logger.error("ENABLE_DEV_ENDPOINTS is set in production; dev endpoints stay disabled")
+    else:
+        logger.warning(
+            "DEV ENDPOINTS ENABLED: /api/dev/auth/bypass issues sessions without a password. Local development only."
+        )
 
-def now() -> datetime:
-    return datetime.now(timezone.utc)
+
+def dev_endpoints_enabled() -> bool:
+    return settings.enable_dev_endpoints and not IS_PRODUCTION
 
 
 class SignupRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=6)
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH)
     name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("password")
+    @classmethod
+    def password_not_common(cls, value: str) -> str:
+        return check_password_policy(value)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=PASSWORD_MAX_LENGTH)
 
 
 class DevAuthBypassRequest(BaseModel):
@@ -251,26 +211,26 @@ class DevAuthBypassRequest(BaseModel):
 
 
 class SimulationInput(BaseModel):
-    symbol: str = Field(min_length=1, max_length=20)
+    symbol: str = Field(pattern=SYMBOL_PATTERN)
     strategy: str = Field(min_length=1, max_length=60)
     startingCapital: float = Field(gt=0)
     notes: Optional[str] = Field(default=None, max_length=400)
 
 
 class SimulationUpdate(BaseModel):
-    status: Optional[str] = Field(default=None, max_length=30)
+    status: Optional[SimulationStatus] = None
     notes: Optional[str] = Field(default=None, max_length=400)
 
 
 class TrainingPayload(BaseModel):
-    symbol: str = Field(min_length=1, max_length=20)
+    symbol: str = Field(pattern=SYMBOL_PATTERN)
     shortWindow: int = Field(gt=1, le=200)
     longWindow: int = Field(gt=2, le=400)
     strategyId: Optional[str] = Field(default=None, max_length=60)
 
 
 class PredictionPayload(BaseModel):
-    symbol: str = Field(min_length=1, max_length=20)
+    symbol: str = Field(pattern=SYMBOL_PATTERN)
 
 
 class ChatHistoryItem(BaseModel):
@@ -283,6 +243,46 @@ class ChatRequest(BaseModel):
     history: List[ChatHistoryItem] = Field(default_factory=list)
 
 
+
+BACKTEST_SUMMARY_FIELDS = ("id", "symbol", "strategy", "range", "period", "summary", "dataSource", "createdAt")
+RISK_HEADLINE_FIELDS = ("sharpe", "sortino", "cagr", "volatility", "winRate")
+
+
+def model_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    classification = record.get("classification") or {}
+    strategy_summary = (record.get("strategy") or {}).get("summary") or {}
+    strategy_metrics = (record.get("strategy") or {}).get("metrics") or {}
+    return {
+        "id": record.get("id"),
+        "symbol": record.get("symbol"),
+        "modelType": record.get("modelType"),
+        "modelName": record.get("modelName"),
+        "label": record.get("label"),
+        "range": record.get("range"),
+        "trainedAt": record.get("trainedAt"),
+        "dataSource": record.get("dataSource"),
+        "artifactBytes": record.get("artifactBytes"),
+        "accuracy": classification.get("accuracy"),
+        "baselineAccuracy": classification.get("baselineAccuracy"),
+        "rocAuc": classification.get("rocAuc"),
+        "strategyReturn": strategy_summary.get("totalReturn"),
+        "buyHoldReturn": strategy_summary.get("buyHoldReturn"),
+        "strategySharpe": strategy_metrics.get("sharpe"),
+        "tracking": record.get("tracking"),
+    }
+
+
+def public_model(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in record.items() if not key.startswith("_") and key != "artifactId"}
+
+
+def backtest_summary(record: Dict[str, Any]) -> Dict[str, Any]:
+    summary = {key: record.get(key) for key in BACKTEST_SUMMARY_FIELDS}
+    metrics = (record.get("risk") or {}).get("metrics") or {}
+    summary["riskHeadline"] = {key: metrics.get(key) for key in RISK_HEADLINE_FIELDS} if metrics else None
+    return summary
+
+
 class InMemoryStore:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -291,6 +291,9 @@ class InMemoryStore:
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.simulations: Dict[str, Dict[str, Any]] = {}
         self.trained: Dict[str, Dict[str, Any]] = {}
+        self.backtests: Dict[str, Dict[str, Any]] = {}
+        self.models: Dict[str, Dict[str, Any]] = {}
+        self.artifacts: Dict[str, bytes] = {}
 
     async def create_user(self, email: str, name: str, password: str) -> Dict[str, Any]:
         async with self.lock:
@@ -337,18 +340,23 @@ class InMemoryStore:
 
     async def create_session(self, user_id: str) -> Dict[str, Any]:
         async with self.lock:
-            token = secrets.token_urlsafe(32)
+            token = generate_session_token()
             expiry = now() + timedelta(days=settings.session_duration_days)
-            self.sessions[token] = {"user_id": user_id, "expires_at": expiry}
+            self.sessions[hash_session_token(token)] = {"user_id": user_id, "expires_at": expiry}
             return {"token": token, "expires_at": expiry}
+
+    async def delete_session(self, token: str) -> None:
+        async with self.lock:
+            self.sessions.pop(hash_session_token(token), None)
 
     async def resolve_token(self, token: str) -> Optional[Dict[str, Any]]:
         async with self.lock:
-            session = self.sessions.get(token)
+            token_hash = hash_session_token(token)
+            session = self.sessions.get(token_hash)
             if not session:
                 return None
             if session["expires_at"] <= now():
-                self.sessions.pop(token, None)
+                self.sessions.pop(token_hash, None)
                 return None
             user = self.users_by_id.get(session["user_id"])
             if not user:
@@ -420,17 +428,70 @@ class InMemoryStore:
         async with self.lock:
             return [item for item in self.trained.values() if item["user_id"] == user_id]
 
+    async def add_backtest(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        async with self.lock:
+            stored = record | {"id": uuid.uuid4().hex, "userId": user_id, "createdAt": now().isoformat()}
+            self.backtests[stored["id"]] = stored
+            return stored
+
+    async def get_backtest(self, user_id: str, backtest_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.backtests.get(backtest_id)
+            return record if record and record["userId"] == user_id else None
+
+    async def list_backtests(self, user_id: str) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [backtest_summary(r) for r in self.backtests.values() if r["userId"] == user_id]
+        return sorted(records, key=lambda r: r["createdAt"], reverse=True)
+
+    async def add_model(self, user_id: str, record: Dict[str, Any], artifact: bytes) -> Dict[str, Any]:
+        async with self.lock:
+            model_id = uuid.uuid4().hex
+            self.artifacts[model_id] = artifact
+            stored = record | {"id": model_id, "userId": user_id, "artifactId": model_id}
+            self.models[model_id] = stored
+            return stored
+
+    async def get_model(self, user_id: str, model_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.models.get(model_id)
+            return record if record and record["userId"] == user_id else None
+
+    async def list_models(self, user_id: str) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [model_summary(r) for r in self.models.values() if r["userId"] == user_id]
+        return sorted(records, key=lambda r: r["trainedAt"], reverse=True)
+
+    async def latest_model(self, user_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            records = [r for r in self.models.values() if r["userId"] == user_id and r["symbol"] == symbol.upper()]
+        return max(records, key=lambda r: r["trainedAt"]) if records else None
+
+    async def get_artifact(self, record: Dict[str, Any]) -> Optional[bytes]:
+        async with self.lock:
+            return self.artifacts.get(record["artifactId"])
+
 
 class MongoStore:
     def __init__(self, dsn: str, db_name: str) -> None:
         if AsyncIOMotorClient is None:  # pragma: no cover - guarded by import
             raise RuntimeError("MongoDB driver is not available")
-        self.client = AsyncIOMotorClient(dsn)
+        # Small pool + short server selection: many serverless instances may each hold a pool,
+        # and a request must fail fast rather than hang when the cluster is unreachable.
+        self.client = AsyncIOMotorClient(
+            dsn,
+            maxPoolSize=settings.mongo_max_pool_size,
+            serverSelectionTimeoutMS=5000,
+        )
         self.db = self.client[db_name]
         self.users = self.db["users"]
         self.sessions = self.db["sessions"]
         self.simulations = self.db["simulations"]
         self.training = self.db["training"]
+        self.backtests = self.db["backtests"]
+        self.models = self.db["models"]
+        # Model artifacts live in GridFS (never on local disk: serverless filesystems are ephemeral).
+        self.artifacts = AsyncIOMotorGridFSBucket(self.db, bucket_name="model_artifacts") if AsyncIOMotorGridFSBucket else None
         self._indexes_ready = False
 
     async def init(self) -> None:
@@ -442,11 +503,19 @@ class MongoStore:
         await self.sessions.create_index("userId")
         await self.simulations.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
         await self.training.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1)], unique=True)
-        # Backfill historical session records that predate the token field to avoid unique index conflicts.
-        await self.sessions.update_many(
-            {"$or": [{"token": {"$exists": False}}, {"token": None}]},
-            [{"$set": {"token": "$_id"}}],
+        await self.backtests.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
+        await self.models.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1), ("trainedAt", DESCENDING or -1)])
+        # Sessions created before token hashing stored the raw token (as _id and/or a token
+        # field). Those are replayable if leaked, so invalidate them; users simply sign in again.
+        legacy = await self.sessions.delete_many(
+            {"$or": [{"token": {"$exists": True}}, {"tokenHash": {"$exists": False}}]}
         )
+        if legacy.deleted_count:
+            logger.warning("Invalidated %d legacy plaintext sessions", legacy.deleted_count)
+        try:
+            await self.sessions.drop_index("token_1")
+        except Exception:  # noqa: BLE001 - index only exists on older databases
+            pass
         self._indexes_ready = True
 
     async def close(self) -> None:
@@ -526,21 +595,23 @@ class MongoStore:
             raise
 
     async def create_session(self, user_id: str) -> Dict[str, Any]:
-        token = secrets.token_urlsafe(32)
+        token = generate_session_token()
+        token_hash = hash_session_token(token)
         expiry = now() + timedelta(days=settings.session_duration_days)
         record = {
-            "_id": token,
-            "token": token,
+            "_id": token_hash,
+            "tokenHash": token_hash,
             "userId": coerce_object_id(user_id),
             "expiresAt": expiry,
         }
         await self.sessions.insert_one(record)
         return {"token": token, "expires_at": expiry}
 
+    async def delete_session(self, token: str) -> None:
+        await self.sessions.delete_one({"_id": hash_session_token(token)})
+
     async def resolve_token(self, token: str) -> Optional[Dict[str, Any]]:
-        record = await self.sessions.find_one({"_id": token})
-        if not record:
-            record = await self.sessions.find_one({"token": token})
+        record = await self.sessions.find_one({"_id": hash_session_token(token)})
         if not record:
             return None
         expires_at: Optional[datetime] = record.get("expiresAt")
@@ -644,266 +715,150 @@ class MongoStore:
             results.append(self._format_training(document))
         return results
 
+    @staticmethod
+    def _format_backtest(document: Dict[str, Any]) -> Dict[str, Any]:
+        record = {key: value for key, value in document.items() if key != "_id"}
+        record["id"] = str(document["_id"])
+        return record
 
-store: InMemoryStore | MongoStore = InMemoryStore()
+    async def add_backtest(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        backtest_id = uuid.uuid4().hex
+        document = record | {"_id": backtest_id, "userId": user_id, "createdAt": now().isoformat()}
+        await self.backtests.insert_one(document)
+        return self._format_backtest(document)
+
+    async def get_backtest(self, user_id: str, backtest_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.backtests.find_one({"_id": backtest_id, "userId": user_id})
+        return self._format_backtest(document) if document else None
+
+    async def list_backtests(self, user_id: str) -> List[Dict[str, Any]]:
+        projection = {"equity": 0, "drawdown": 0, "buyHold": 0, "benchmarkEquity": 0, "trades": 0, "risk.drawdown": 0, "risk.buyHold": 0, "risk.benchmark": 0}
+        cursor = self.backtests.find({"userId": user_id}, projection).sort("createdAt", DESCENDING or -1)
+        return [backtest_summary(self._format_backtest(document)) async for document in cursor]
+
+    async def add_model(self, user_id: str, record: Dict[str, Any], artifact: bytes) -> Dict[str, Any]:
+        if self.artifacts is None:  # pragma: no cover - motor always ships GridFS
+            raise RuntimeError("GridFS is unavailable")
+        model_id = uuid.uuid4().hex
+        artifact_id = await self.artifacts.upload_from_stream(f"{model_id}.joblib", artifact, metadata={"userId": user_id})
+        document = record | {"_id": model_id, "userId": user_id, "artifactId": artifact_id}
+        await self.models.insert_one(document)
+        return self._format_model(document)
+
+    @staticmethod
+    def _format_model(document: Dict[str, Any]) -> Dict[str, Any]:
+        record = {key: value for key, value in document.items() if key not in ("_id",)}
+        record["id"] = str(document["_id"])
+        record["artifactId"] = str(document.get("artifactId"))
+        return record
+
+    async def get_model(self, user_id: str, model_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.models.find_one({"_id": model_id, "userId": user_id})
+        if not document:
+            return None
+        record = self._format_model(document)
+        record["_artifactObjectId"] = document.get("artifactId")
+        return record
+
+    async def list_models(self, user_id: str) -> List[Dict[str, Any]]:
+        projection = {"strategy.equity": 0, "strategy.buyHold": 0, "strategy.trades": 0, "labelDistribution": 0}
+        cursor = self.models.find({"userId": user_id}, projection).sort("trainedAt", DESCENDING or -1)
+        return [model_summary(self._format_model(document)) async for document in cursor]
+
+    async def latest_model(self, user_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+        document = await self.models.find_one({"userId": user_id, "symbol": symbol.upper()}, sort=[("trainedAt", DESCENDING or -1)])
+        if not document:
+            return None
+        record = self._format_model(document)
+        record["_artifactObjectId"] = document.get("artifactId")
+        return record
+
+    async def get_artifact(self, record: Dict[str, Any]) -> Optional[bytes]:
+        if self.artifacts is None or record.get("_artifactObjectId") is None:
+            return None
+        stream = await self.artifacts.open_download_stream(record["_artifactObjectId"])
+        return await stream.read()
 
 
-@app.on_event("startup")
-async def configure_store() -> None:
-    global store
-    mongo_dsn = resolve_mongo_dsn(settings)
+Store = Union[InMemoryStore, MongoStore]
+
+
+class StoreUnavailableError(RuntimeError):
+    """Raised when strict database mode forbids falling back to the in-memory store."""
+
+
+# The store is created lazily on first use and cached for the life of the process, so the
+# app never depends on startup hooks (serverless cold starts don't guarantee them). The
+# event loop is remembered because Motor clients are bound to the loop that created them.
+_store: Optional[Store] = None
+_store_loop: Optional[asyncio.AbstractEventLoop] = None
+_store_lock: Optional[asyncio.Lock] = None
+
+
+def _in_memory_fallback(reason: str) -> InMemoryStore:
+    if settings.strict_db:
+        raise StoreUnavailableError(reason)
+    logger.warning("%s; using ephemeral in-memory store (set STRICT_DB=true to fail instead)", reason)
+    return InMemoryStore()
+
+
+async def _create_store() -> Store:
     if settings.use_in_memory_db:
-        store = InMemoryStore()
-        logger.info("Using in-memory data store")
-        return
+        if ON_VERCEL:
+            logger.warning("USE_IN_MEMORY_DB is set on serverless hosting; data will not persist between requests")
+        else:
+            logger.info("Using in-memory data store")
+        return InMemoryStore()
+    mongo_dsn = resolve_mongo_dsn(settings)
     if not mongo_dsn:
-        store = InMemoryStore()
-        logger.warning("MongoDB connection string not provided; using in-memory store")
-        return
+        return _in_memory_fallback("MongoDB connection string not provided")
     if AsyncIOMotorClient is None or DuplicateKeyError is None or ASCENDING is None or ReturnDocument is None:
-        store = InMemoryStore()
-        logger.warning("MongoDB dependencies are unavailable; using in-memory store")
-        return
+        return _in_memory_fallback("MongoDB dependencies are unavailable")
     mongo_store = MongoStore(mongo_dsn, settings.mongodb_db)
     try:
         await mongo_store.init()
     except Exception as exc:  # noqa: BLE001
-        logger.error("Failed to initialise MongoDB store: %s", exc, exc_info=True)
-        store = InMemoryStore()
-        return
-    store = mongo_store
+        logger.error("Failed to initialise MongoDB store at %s: %s", mask_mongo_dsn(mongo_dsn), exc)
+        await mongo_store.close()
+        return _in_memory_fallback("MongoDB is unreachable")
     logger.info("Connected to MongoDB at %s", mask_mongo_dsn(mongo_dsn))
+    return mongo_store
 
 
-@app.on_event("shutdown")
-async def shutdown_store() -> None:
-    if isinstance(store, MongoStore):
-        await store.close()
+async def get_store() -> Store:
+    global _store, _store_loop, _store_lock
+    loop = asyncio.get_running_loop()
+    if _store is not None and _store_loop is loop:
+        return _store
+    if _store_lock is None or _store_loop is not loop:
+        _store_lock = asyncio.Lock()
+    async with _store_lock:
+        if _store is None or _store_loop is not loop:
+            try:
+                _store = await _create_store()
+            except StoreUnavailableError as exc:
+                logger.error("Data store unavailable (strict mode): %s", exc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Data store unavailable. Please try again shortly.",
+                ) from exc
+            _store_loop = loop
+    return _store
 
 
-async def get_current_user(authorization: str = Header("")) -> Dict[str, Any]:
+async def get_current_user(
+    authorization: str = Header(""),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-    token = authorization.split(" ", 1)[1]
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     user = await store.resolve_token(token)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired session")
     return user | {"token": token}
-
-
-def yahoo_headers() -> Dict[str, str]:
-    return {"User-Agent": settings.yahoo_user_agent, "Accept": "application/json"}
-
-
-def fetch_quotes(symbols: List[str]) -> List[Dict[str, Any]]:
-    if not symbols:
-        return []
-
-    collected: List[Dict[str, Any]] = []
-    remaining = [symbol.upper() for symbol in symbols]
-
-    if yf is not None:
-        try:
-            collected = fetch_quotes_with_yfinance(remaining)
-            found = {quote["symbol"] for quote in collected}
-            remaining = [symbol.upper() for symbol in symbols if symbol.upper() not in found]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("yfinance quote fetch failed: %s", exc)
-            remaining = [symbol.upper() for symbol in symbols]
-
-    if not remaining:
-        return collected
-
-    url = "https://query1.finance.yahoo.com/v7/finance/quote"
-    params = {"symbols": ",".join(remaining)}
-    try:
-        response = requests.get(url, params=params, headers=yahoo_headers(), timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        logger.warning("Quote service error for %s: %s", remaining, exc, exc_info=True)
-        fallback = build_offline_quotes(remaining)
-        if collected or fallback:
-            return collected + fallback
-        raise HTTPException(status_code=502, detail=f"Quote service error: {exc}") from exc
-
-    data = response.json()
-    results = data.get("quoteResponse", {}).get("result", [])
-    timestamp = now().isoformat()
-    for entry in results:
-        price = entry.get("regularMarketPrice")
-        previous_close = entry.get("regularMarketPreviousClose")
-        change = None
-        change_percent = None
-        if price is not None and previous_close not in (None, 0):
-            change = price - previous_close
-            change_percent = (change / previous_close) * 100 if previous_close else None
-        collected.append(
-            {
-                "symbol": entry.get("symbol"),
-                "price": price,
-                "change": change,
-                "changePercent": change_percent,
-                "previousClose": previous_close,
-                "currency": entry.get("currency"),
-                "updated": timestamp,
-            }
-        )
-
-    requested_symbols = [symbol.upper() for symbol in symbols]
-    merged: Dict[str, Dict[str, Any]] = {}
-    for quote in collected:
-        symbol = str(quote.get("symbol", "") or "").upper()
-        if not symbol:
-            continue
-        merged[symbol] = quote | {"symbol": symbol}
-
-    missing = [symbol for symbol in requested_symbols if symbol not in merged]
-    if missing:
-        offline_quotes = build_offline_quotes(missing)
-        for quote in offline_quotes:
-            symbol = str(quote.get("symbol", "") or "").upper()
-            if not symbol or symbol in merged:
-                continue
-            merged[symbol] = quote | {"symbol": symbol}
-
-    ordered_quotes = [merged[symbol] for symbol in requested_symbols if symbol in merged]
-    if ordered_quotes:
-        return ordered_quotes
-
-    return build_offline_quotes(requested_symbols)
-
-
-def fetch_chart(symbol: str, range_value: str = "1mo", interval: str = "1d") -> Dict[str, Any]:
-    if yf is not None:
-        try:
-            chart = fetch_chart_with_yfinance(symbol, range_value, interval)
-            if chart["points"]:
-                return chart
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("yfinance chart fetch failed for %s: %s", symbol, exc)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-    params = {
-        "range": range_value,
-        "interval": interval,
-        "includePrePost": "false",
-    }
-    try:
-        response = requests.get(url, params=params, headers=yahoo_headers(), timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        if settings.use_in_memory_db:
-            return build_offline_chart(symbol, range_value, interval)
-        raise HTTPException(status_code=502, detail=f"Chart service error: {exc}") from exc
-    data = response.json()
-    result = (data.get("chart") or {}).get("result")
-    if not result:
-        if settings.use_in_memory_db:
-            return build_offline_chart(symbol, range_value, interval)
-        raise HTTPException(status_code=404, detail=f"No chart data for {symbol}")
-    chart = result[0]
-    timestamps = chart.get("timestamp") or []
-    indicators = chart.get("indicators") or {}
-    quote = (indicators.get("quote") or [{}])[0]
-    opens = quote.get("open") or []
-    highs = quote.get("high") or []
-    lows = quote.get("low") or []
-    closes = quote.get("close") or []
-    volumes = quote.get("volume") or []
-    points: List[Dict[str, Any]] = []
-    for index, ts in enumerate(timestamps):
-        if ts is None:
-            continue
-        close = closes[index] if index < len(closes) else None
-        open_price = opens[index] if index < len(opens) else None
-        high = highs[index] if index < len(highs) else None
-        low = lows[index] if index < len(lows) else None
-        volume = volumes[index] if index < len(volumes) else None
-        if close is None or open_price is None or high is None or low is None:
-            continue
-        iso_timestamp = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-        points.append(
-            {
-                "timestamp": iso_timestamp,
-                "open": float(open_price),
-                "high": float(high),
-                "low": float(low),
-                "close": float(close),
-                "volume": int(volume) if volume is not None else None,
-            }
-        )
-    meta = chart.get("meta") or {}
-    return {
-        "symbol": chart.get("meta", {}).get("symbol", symbol.upper()),
-        "points": points,
-        "timezone": meta.get("exchangeTimezoneName"),
-        "currency": meta.get("currency"),
-        "range": range_value,
-        "interval": interval,
-        "previousClose": meta.get("previousClose"),
-    }
-
-
-def search_symbols(query: str) -> List[Dict[str, Any]]:
-    # Try yfinance first (handles Yahoo auth cookies automatically)
-    if yf is not None:
-        try:
-            yf_results = fetch_search_with_yfinance(query)
-            if yf_results:
-                return yf_results
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("yfinance search fallback failed: %s", exc)
-
-    url = "https://query1.finance.yahoo.com/v1/finance/search"
-    params = {"q": query, "quotesCount": 10, "newsCount": 0}
-    try:
-        response = requests.get(url, params=params, headers=yahoo_headers(), timeout=10)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        logger.warning("Search service error: %s", exc)
-        return build_offline_search(query)
-    data = response.json()
-    results = data.get("quotes") or []
-    output: List[Dict[str, Any]] = []
-    for entry in results:
-        symbol = entry.get("symbol")
-        if not symbol:
-            continue
-        output.append(
-            {
-                "symbol": symbol,
-                "shortName": entry.get("shortname"),
-                "longName": entry.get("longname"),
-                "exchange": entry.get("exchange"),
-                "type": entry.get("quoteType"),
-            }
-        )
-    return output
-
-
-def moving_average(values: List[float], window: int) -> List[Optional[float]]:
-    result: List[Optional[float]] = []
-    accumulator = 0.0
-    for index, value in enumerate(values):
-        accumulator += value
-        if index >= window:
-            accumulator -= values[index - window]
-        if index + 1 >= window:
-            result.append(accumulator / window)
-        else:
-            result.append(None)
-    return result
-
-
-def compute_drawdown(values: List[float]) -> float:
-    peak = values[0]
-    max_drawdown = 0.0
-    for price in values:
-        if price > peak:
-            peak = price
-        drawdown = (price - peak) / peak if peak else 0
-        if drawdown < max_drawdown:
-            max_drawdown = drawdown
-    return abs(max_drawdown) * 100
 
 
 INVESTMENT_PROMPT_RE = re.compile(r"which stock should i invest in", re.IGNORECASE)
@@ -937,7 +892,7 @@ def build_investment_reply(message: str) -> Dict[str, Any]:
             "angle": "Diversifies into Indian energy/retail with strong domestic flows.",
         },
     ]
-    quotes = fetch_quotes([item["symbol"] for item in suggestions])
+    quotes = market.fetch_quotes([item["symbol"] for item in suggestions])
     quote_map = {quote["symbol"]: quote for quote in quotes}
     per_slice = budget / len(suggestions)
     lines = [
@@ -1005,18 +960,25 @@ def assemble_chat_models() -> List[str]:
     return candidates
 
 
-@app.post("/auth/signup")
-async def signup(payload: SignupRequest) -> Dict[str, Any]:
+signup_rate_limit = rate_limit("auth-signup", settings.auth_rate_limit_per_minute)
+login_rate_limit = rate_limit("auth-login", settings.auth_rate_limit_per_minute)
+dev_auth_rate_limit = rate_limit("auth-dev", settings.auth_rate_limit_per_minute)
+market_rate_limit = rate_limit("market", settings.market_rate_limit_per_minute)
+SymbolPath = Annotated[str, Path(pattern=SYMBOL_PATTERN)]
+
+
+@router.post("/auth/signup", dependencies=[Depends(signup_rate_limit)])
+async def signup(payload: SignupRequest, store: Store = Depends(get_store)) -> Dict[str, Any]:
     try:
         user = await store.create_user(payload.email, payload.name, payload.password)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered") from exc
     session = await store.create_session(user["id"])
     return {"token": session["token"], "user": user}
 
 
-@app.post("/auth/login")
-async def login(payload: LoginRequest) -> Dict[str, Any]:
+@router.post("/auth/login", dependencies=[Depends(login_rate_limit)])
+async def login(payload: LoginRequest, store: Store = Depends(get_store)) -> Dict[str, Any]:
     user = await store.get_user_by_credentials(payload.email, payload.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
@@ -1024,9 +986,18 @@ async def login(payload: LoginRequest) -> Dict[str, Any]:
     return {"token": session["token"], "user": user}
 
 
-@app.post("/dev/auth/bypass")
-async def dev_auth_bypass(payload: Optional[DevAuthBypassRequest] = None) -> Dict[str, Any]:
-    if not settings.enable_dev_endpoints:
+@router.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def logout(user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Response:
+    await store.delete_session(user["token"])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/dev/auth/bypass", dependencies=[Depends(dev_auth_rate_limit)])
+async def dev_auth_bypass(
+    payload: Optional[DevAuthBypassRequest] = None,
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    if not dev_endpoints_enabled():
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Dev endpoints are disabled")
     email = (payload.email if payload and payload.email else "dev@example.com").lower()
     name = payload.name if payload and payload.name else "Dev User"
@@ -1035,44 +1006,60 @@ async def dev_auth_bypass(payload: Optional[DevAuthBypassRequest] = None) -> Dic
     return {"token": session["token"], "user": user}
 
 
-@app.get("/market/watchlist")
-async def get_watchlist(symbols: Optional[str] = None) -> List[Dict[str, Any]]:
-    requested = [symbol.strip().upper() for symbol in (symbols.split(",") if symbols else WATCHLIST_SYMBOLS) if symbol.strip()]
-    return fetch_quotes(requested)
+# Quote endpoints require a session and are rate limited per client, so the API can't be
+# used as an open Yahoo proxy (which would also get the deployment's IPs throttled).
+@router.get("/market/watchlist", dependencies=[Depends(market_rate_limit)])
+async def get_watchlist(
+    symbols: Optional[str] = Query(default=None, max_length=400),
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    _ = user
+    requested = parse_symbol_list(symbols) if symbols else list(WATCHLIST_SYMBOLS)
+    return await market.get_quotes(requested)
 
 
-@app.get("/market/quote/{symbol}")
-async def get_quote(symbol: str) -> Dict[str, Any]:
-    quotes = fetch_quotes([symbol.upper()])
+@router.get("/market/quote/{symbol}", dependencies=[Depends(market_rate_limit)])
+async def get_quote(symbol: SymbolPath, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    _ = user
+    quotes = await market.get_quotes([symbol.upper()])
     if not quotes:
-        raise HTTPException(status_code=404, detail=f"No quote for {symbol}")
+        raise HTTPException(status_code=404, detail=f"No quote for {symbol.upper()}")
     return quotes[0]
 
 
-@app.get("/market/search")
-async def search_market(q: str, user: Dict[str, Any] = Depends(get_current_user)) -> List[Dict[str, Any]]:
+@router.get("/market/search")
+async def search_market(
+    q: str = Query(min_length=1, max_length=64),
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
     _ = user  # dependency ensures auth
-    return search_symbols(q)
+    return await market.search(q)
 
 
-@app.get("/market/chart/{symbol}")
+@router.get("/market/chart/{symbol}")
 async def get_chart(
-    symbol: str,
-    range: str = "1mo",
-    interval: str = "1d",
+    symbol: SymbolPath,
+    range: ChartRange = "1mo",
+    interval: ChartInterval = "1d",
     user: Dict[str, Any] = Depends(get_current_user),
 ) -> Dict[str, Any]:
     _ = user
-    return fetch_chart(symbol, range_value=range, interval=interval)
+    return await market.get_chart(symbol, range, interval)
 
 
-@app.get("/analytics/strategies")
+@router.get("/analytics/strategies")
 async def get_strategies() -> List[Dict[str, Any]]:
-    return DEFAULT_STRATEGIES
+    return [entry | {"runnable": entry["id"] in STRATEGY_REGISTRY} for entry in DEFAULT_STRATEGIES]
 
 
-@app.get("/analytics/overview")
-async def get_overview(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+@router.get("/strategies")
+async def get_runnable_strategies() -> List[Dict[str, Any]]:
+    """Strategies the backtester can run, with their parameter schema."""
+    return list_strategies()
+
+
+@router.get("/analytics/overview")
+async def get_overview(user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Dict[str, Any]:
     simulations = await store.list_simulations(user["id"])
     trained = await store.list_trained(user["id"])
 
@@ -1159,14 +1146,44 @@ async def get_overview(user: Dict[str, Any] = Depends(get_current_user)) -> Dict
     }
 
 
-@app.get("/analytics/sparkline")
-async def get_sparkline(symbols: Optional[str] = None, user: Dict[str, Any] = Depends(get_current_user)) -> List[Dict[str, Any]]:
+@router.get("/analytics/training")
+async def list_training_runs(user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> List[Dict[str, Any]]:
+    """Past training runs (one per symbol), newest first, without the bulky price sample."""
+    runs: List[Dict[str, Any]] = []
+    for entry in await store.list_trained(user["id"]):
+        payload = entry.get("payload") or {}
+        runs.append(
+            {
+                "symbol": entry.get("symbol") or payload.get("symbol"),
+                "strategyId": payload.get("strategyId") or entry.get("strategy_id"),
+                "shortWindow": payload.get("shortWindow"),
+                "longWindow": payload.get("longWindow"),
+                "metrics": payload.get("metrics") or {},
+                "trainedAt": payload.get("trainedAt") or entry.get("trained_at"),
+            }
+        )
+    runs.sort(key=lambda run: run.get("trainedAt") or "", reverse=True)
+    return runs
+
+
+@router.get("/analytics/sparkline")
+async def get_sparkline(
+    symbols: Optional[str] = Query(default=None, max_length=400),
+    user: Dict[str, Any] = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
     _ = user
-    requested = [symbol.strip().upper() for symbol in (symbols.split(",") if symbols else WATCHLIST_SYMBOLS) if symbol.strip()]
+    requested = parse_symbol_list(symbols) if symbols else list(WATCHLIST_SYMBOLS)
+    # Fetch concurrently in worker threads: the sync Yahoo clients must not block the event loop.
+    charts = await asyncio.gather(
+        *(market.get_chart(symbol, "1mo", "1d") for symbol in requested),
+        return_exceptions=True,
+    )
     series: List[Dict[str, Any]] = []
-    for symbol in requested:
+    for symbol, outcome in zip(requested, charts):
         try:
-            chart = fetch_chart(symbol, range_value="1mo", interval="1d")
+            if isinstance(outcome, BaseException):
+                raise outcome
+            chart = outcome
         except HTTPException as exc:
             logger.warning("Sparkline chart fetch failed for %s: %s", symbol, exc)
             chart = build_offline_chart(symbol, "1mo", "1d")
@@ -1180,100 +1197,115 @@ async def get_sparkline(symbols: Optional[str] = None, user: Dict[str, Any] = De
             if "timestamp" in point and "close" in point
         ]
         fallback_symbol = chart.get("symbol", symbol)
-        series.append({"symbol": fallback_symbol, "points": points})
+        series.append({"symbol": fallback_symbol, "points": points, "source": chart.get("source", "live")})
     return series
 
 
-@app.get("/simulations")
-async def list_simulations(user: Dict[str, Any] = Depends(get_current_user)) -> List[Dict[str, Any]]:
+@router.get("/simulations")
+async def list_simulations(user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> List[Dict[str, Any]]:
     return await store.list_simulations(user["id"])
 
 
-@app.post("/simulations")
-async def create_simulation(payload: SimulationInput, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+@router.post("/simulations")
+async def create_simulation(payload: SimulationInput, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Dict[str, Any]:
     return await store.add_simulation(user["id"], payload)
 
 
-@app.patch("/simulations/{sim_id}")
-async def patch_simulation(sim_id: str, payload: SimulationUpdate, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+@router.patch("/simulations/{sim_id}")
+async def patch_simulation(
+    sim_id: str,
+    payload: SimulationUpdate,
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
     try:
         return await store.update_simulation(user["id"], sim_id, payload)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Simulation not found") from exc
 
 
-@app.delete("/simulations/{sim_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-async def remove_simulation(sim_id: str, user: Dict[str, Any] = Depends(get_current_user)) -> Response:
+@router.delete("/simulations/{sim_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+async def remove_simulation(sim_id: str, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Response:
     try:
         await store.delete_simulation(user["id"], sim_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Simulation not found") from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@app.post("/analytics/train")
-async def train_strategy(payload: TrainingPayload, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+@router.post("/analytics/train")
+async def train_strategy(payload: TrainingPayload, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Dict[str, Any]:
+    """Lab trainer: a zero-cost SMA-crossover backtest over 6 months of daily bars (in-sample)."""
     if payload.shortWindow >= payload.longWindow:
         raise HTTPException(status_code=422, detail="shortWindow must be less than longWindow")
-    chart = fetch_chart(payload.symbol, range_value="6mo", interval="1d")
-    closes = [point["close"] for point in chart["points"]]
-    if len(closes) < payload.longWindow + 10:
+    chart = await market.get_chart(payload.symbol, "6mo", "1d")
+    bars = bars_from_points(chart.get("points", []))
+    if len(bars) < payload.longWindow + 10:
         raise HTTPException(status_code=422, detail="Not enough history for requested windows")
-    short_sma = moving_average(closes, payload.shortWindow)
-    long_sma = moving_average(closes, payload.longWindow)
-    sample = []
-    for point, short_val, long_val in zip(chart["points"][-120:], short_sma[-120:], long_sma[-120:]):
-        sample.append(
-            {
-                "timestamp": point["timestamp"],
-                "close": point["close"],
-                "shortSma": short_val if short_val is not None else point["close"],
-                "longSma": long_val if long_val is not None else point["close"],
-            }
-        )
-    total_return = (closes[-1] - closes[0]) / closes[0] if closes else 0
-    days = len(closes)
-    annualized = (1 + total_return) ** (365 / days) - 1 if days > 0 else 0
-    crossovers = [
-        1
-        for idx in range(1, len(short_sma))
-        if short_sma[idx] is not None
-        and long_sma[idx] is not None
-        and short_sma[idx - 1] is not None
-        and long_sma[idx - 1] is not None
-        and (short_sma[idx] > long_sma[idx]) != (short_sma[idx - 1] > long_sma[idx - 1])
+    strategy = get_strategy("sma-crossover")
+    params = strategy.parse_params({"shortWindow": payload.shortWindow, "longWindow": payload.longWindow})
+    signals = strategy.generate_signals(bars, params)
+    result = run_backtest(bars, signals, BacktestConfig(starting_capital=100_000))
+    equity = result.pop("_series")["equity"]
+    curve_values, _ = series_metrics(equity, PERIODS_PER_YEAR["1d"], 0.0)
+    trade_win_rate, _ = win_rate(result["trades"])
+    close = bars["close"]
+    short_sma = close.rolling(payload.shortWindow, min_periods=payload.shortWindow).mean()
+    long_sma = close.rolling(payload.longWindow, min_periods=payload.longWindow).mean()
+    tail = bars.index[-120:]
+    sample = [
+        {
+            "timestamp": ts.isoformat(),
+            "close": float(close.loc[ts]),
+            "shortSma": float(short_sma.loc[ts]) if pd.notna(short_sma.loc[ts]) else float(close.loc[ts]),
+            "longSma": float(long_sma.loc[ts]) if pd.notna(long_sma.loc[ts]) else float(close.loc[ts]),
+        }
+        for ts in tail
     ]
-    trades = len(crossovers)
-    win_rate = 0.55 if trades else 0.0
-    sharpe = (total_return / math.sqrt(days / 252)) if days > 0 else 0
-    max_drawdown = compute_drawdown(closes)
     strategy_id = payload.strategyId or f"sma-{payload.shortWindow}-{payload.longWindow}"
-    result = {
-        "symbol": payload.symbol.upper(),
-        "strategyId": strategy_id,
-        "shortWindow": payload.shortWindow,
-        "longWindow": payload.longWindow,
-        "metrics": {
-            "totalReturn": total_return,
-            "annualizedReturn": annualized,
-            "winRate": win_rate,
-            "trades": trades,
-            "sharpe": sharpe,
-            "maxDrawdown": max_drawdown,
-        },
-        "sample": sample,
-        "trainedAt": now().isoformat(),
-    }
-    await store.record_training(user["id"], payload.symbol, strategy_id, result)
-    return result
+    result_payload = sanitize(
+        {
+            "symbol": payload.symbol.upper(),
+            "strategyId": strategy_id,
+            "shortWindow": payload.shortWindow,
+            "longWindow": payload.longWindow,
+            "metrics": {
+                "totalReturn": curve_values.get("totalReturn"),
+                "annualizedReturn": curve_values.get("cagr"),
+                "winRate": trade_win_rate,
+                "trades": result["summary"]["tradeCount"],
+                "sharpe": curve_values.get("sharpe"),
+                "maxDrawdown": curve_values.get("maxDrawdown"),
+            },
+            "basis": "Zero-cost SMA crossover backtest, next-bar fills, whole window in-sample",
+            "dataSource": chart.get("source", "live"),
+            "sample": sample,
+            "trainedAt": now().isoformat(),
+        }
+    )
+    await store.record_training(user["id"], payload.symbol, strategy_id, result_payload)
+    return result_payload
 
 
-@app.post("/analytics/predict")
-async def predict(payload: PredictionPayload, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+@router.post("/analytics/predict")
+async def predict(payload: PredictionPayload, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Dict[str, Any]:
+    model_record = await store.latest_model(user["id"], payload.symbol)
+    if model_record:
+        result = await _model_signal(store, user["id"], model_record)
+        top = max(result["probabilities"].values()) if result.get("probabilities") else None
+        return {
+            "symbol": payload.symbol.upper(),
+            "strategyId": f"ml:{model_record['modelType']}",
+            "signal": "buy" if result["signal"] == "buy" else "hold",
+            "confidence": top if top is not None else 0.0,
+            "summary": f"{model_record['modelName']} trained {model_record['trainedAt'][:10]} predicts '{result['predictionName']}' for the next {model_record['label']['horizon']} bar(s).",
+            "metadata": {"basis": "ml-model", "modelId": model_record["id"], "probabilities": result.get("probabilities")},
+            "generatedAt": now().isoformat(),
+        }
     training = await store.get_training(user["id"], payload.symbol)
     if not training:
         raise HTTPException(status_code=404, detail="Train the strategy first")
-    chart = fetch_chart(payload.symbol, range_value="1mo", interval="1d")
+    chart = await market.get_chart(payload.symbol, "1mo", "1d")
     closes = [point["close"] for point in chart["points"]]
     if len(closes) < 5:
         raise HTTPException(status_code=422, detail="Not enough data for prediction")
@@ -1292,16 +1324,16 @@ async def predict(payload: PredictionPayload, user: Dict[str, Any] = Depends(get
         "signal": signal,
         "confidence": confidence,
         "summary": summary,
-        "metadata": {"recent": recent},
+        "metadata": {"recent": recent, "basis": "naive-momentum"},
         "generatedAt": now().isoformat(),
     }
 
 
-@app.post("/chat")
+@router.post("/chat")
 async def chat(payload: ChatRequest, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     _ = user
     if INVESTMENT_PROMPT_RE.search(payload.message):
-        prepared = build_investment_reply(payload.message)
+        prepared = await asyncio.to_thread(build_investment_reply, payload.message)
         return {"reply": prepared["reply"], "citations": prepared["citations"], "actions": []}
     if payload.message.lower().startswith("create a simulation"):
         reply = "Jump to the Simulations page and use the create form on the left. I will automate this workflow in a future release."
@@ -1337,15 +1369,12 @@ async def chat(payload: ChatRequest, user: Dict[str, Any] = Depends(get_current_
             logger.exception("OpenAI chat completion failed for model %s: %s", model_name, exc)
             break
     if response is None:
-        detail = str(last_error) if last_error else "unknown error"
+        # Provider error text can contain account/infra details; it stays in server logs only.
+        logger.error("All chat models failed; last error type: %s", type(last_error).__name__ if last_error else "none")
         reply = (
-            "I can't reach the assistant right now because every configured OpenAI model returned an error. "
-            "Please check OpenAI usage limits or adjust OPENAI_MODEL / OPENAI_MODEL_FALLBACKS."
+            "I can't reach the assistant right now. Please try again in a little while."
         )
-        citations: List[str] = []
-        if detail:
-            reply = f"{reply}\n\nLast error: {detail}"
-        return {"reply": reply, "citations": citations, "actions": []}
+        return {"reply": reply, "citations": [], "actions": []}
     choice = response.choices[0] if response.choices else None
     content = choice.message.content.strip() if choice and choice.message and choice.message.content else ""
     if not content:
@@ -1357,225 +1386,259 @@ async def chat(payload: ChatRequest, user: Dict[str, Any] = Depends(get_current_
     return {"reply": reply or content, "citations": citations, "actions": []}
 
 
-@app.get("/health")
+backtest_rate_limit = rate_limit("backtest", 20)
+
+
+async def _benchmark_history(symbol: str, range_value: str, skip: bool) -> Optional[Dict[str, Any]]:
+    """Benchmark bars for the risk report; failures degrade to 'unavailable', never fail the run."""
+    if skip:
+        return None
+    try:
+        return await market.get_daily_history(symbol, range_value)
+    except HTTPException:
+        logger.warning("Benchmark history unavailable for %s", symbol)
+        return None
+
+
+@router.post("/backtest/run", dependencies=[Depends(backtest_rate_limit)])
+async def run_backtest_endpoint(
+    payload: BacktestRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    try:
+        strategy = get_strategy(payload.strategy)
+    except KeyError as exc:
+        raise HTTPException(status_code=422, detail="Unknown strategy") from exc
+    try:
+        params = strategy.parse_params(payload.params)
+    except ValueError as exc:
+        # Pydantic messages describe the parameter rule (no internals), so they're safe to return.
+        first = exc.errors()[0] if hasattr(exc, "errors") else None
+        field = ".".join(str(part) for part in first.get("loc", ())) if first else ""
+        message = str(first.get("msg", "")).removeprefix("Value error, ") if first else ""
+        detail = f"Invalid parameter{f' {field}' if field else ''}: {message}" if first else "Invalid strategy parameters"
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    benchmark_symbol = (payload.benchmark or default_benchmark(payload.symbol)).upper()
+    same_as_symbol = benchmark_symbol == payload.symbol.upper()
+    chart, benchmark_chart = await asyncio.gather(
+        market.get_daily_history(payload.symbol, payload.range),
+        _benchmark_history(benchmark_symbol, payload.range, skip=same_as_symbol),
+    )
+    if same_as_symbol:
+        benchmark_chart = chart
+    bars = bars_from_points(chart.get("points", []))
+    needed = strategy.min_history(params) + 2
+    if len(bars) < needed:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Not enough history: {len(bars)} daily bars, this configuration needs at least {needed}. Choose a longer range.",
+        )
+    signals = strategy.generate_signals(bars, params)
+    result = run_backtest(
+        bars,
+        signals,
+        BacktestConfig(starting_capital=payload.startingCapital, cost_bps=payload.costBps, slippage_bps=payload.slippageBps),
+    )
+    series = result.pop("_series")
+    benchmark_bars = bars_from_points(benchmark_chart.get("points", [])) if benchmark_chart else None
+    risk = build_risk_report(
+        equity=series["equity"],
+        buy_hold_equity=series["buyHold"],
+        trades=result["trades"],
+        benchmark_symbol=benchmark_symbol,
+        benchmark_close=benchmark_bars["close"] if benchmark_bars is not None and not benchmark_bars.empty else None,
+        benchmark_source=benchmark_chart.get("source") if benchmark_chart else None,
+        risk_free_annual=payload.riskFreeRate,
+    )
+    benchmark_equity = risk.pop("benchmarkEquity")
+    record = result | {
+        "risk": risk,
+        "benchmarkEquity": downsample(benchmark_equity),
+        "symbol": payload.symbol.upper(),
+        "strategy": {"id": strategy.id, "name": strategy.name, "params": params.model_dump()},
+        "range": payload.range,
+        "config": {
+            "startingCapital": payload.startingCapital,
+            "costBps": payload.costBps,
+            "slippageBps": payload.slippageBps,
+            "benchmark": benchmark_symbol,
+            "riskFreeRate": payload.riskFreeRate,
+        },
+        "dataSource": chart.get("source", "live"),
+        "currency": chart.get("currency"),
+    }
+    return await store.add_backtest(user["id"], record)
+
+
+@router.get("/backtests")
+async def list_backtests(user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> List[Dict[str, Any]]:
+    return await store.list_backtests(user["id"])
+
+
+@router.get("/backtest/{backtest_id}")
+async def get_backtest(
+    backtest_id: str = Path(min_length=1, max_length=64),
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    record = await store.get_backtest(user["id"], backtest_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    return {key: value for key, value in record.items() if key != "trades"} | {"tradeCount": len(record.get("trades", []))}
+
+
+@router.get("/backtest/{backtest_id}/risk")
+async def get_backtest_risk(
+    backtest_id: str = Path(min_length=1, max_length=64),
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    record = await store.get_backtest(user["id"], backtest_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    if not record.get("risk"):
+        raise HTTPException(status_code=404, detail="This run predates risk analytics; run it again to get a risk report")
+    return record["risk"]
+
+
+@router.get("/backtest/{backtest_id}/trades")
+async def get_backtest_trades(
+    backtest_id: str = Path(min_length=1, max_length=64),
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> List[Dict[str, Any]]:
+    record = await store.get_backtest(user["id"], backtest_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    return record.get("trades", [])
+
+
+features_rate_limit = rate_limit("ml-features", 20)
+
+
+@router.get("/ml/feature-catalog")
+async def get_feature_catalog() -> List[Dict[str, Any]]:
+    """Every feature generator with its group, description, and default parameters."""
+    return feature_catalog()
+
+
+@router.post("/ml/features", dependencies=[Depends(features_rate_limit)])
+async def preview_features(payload: FeaturesRequest, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    """Build a leakage-free dataset for a symbol and return a preview (nothing is stored)."""
+    _ = user
+    chart = await market.get_daily_history(payload.symbol, payload.range)
+    try:
+        # CPU-bound pandas work: keep it off the event loop.
+        return await asyncio.to_thread(preview_dataset, payload, chart)
+    except ValueError as exc:
+        # Messages come from our own validation (unknown feature, too little history) — safe to show.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+train_rate_limit = rate_limit("ml-train", 10)
+
+
+@router.post("/ml/train", dependencies=[Depends(train_rate_limit)])
+async def train_ml_model(
+    payload: TrainModelRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    """Train on the earlier window, evaluate on the later unseen window, register the model."""
+    chart = await market.get_daily_history(payload.symbol, payload.range)
+    try:
+        record, artifact = await asyncio.to_thread(train_and_evaluate, payload, chart)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if experiment_tracking.enabled():
+        run_name, params, metrics, tags = tracking_payload(record)
+        tracked = await asyncio.to_thread(experiment_tracking.log_training_run, run_name, params, metrics, tags)
+        record["tracking"] = {"enabled": True, "logged": tracked is not None} | (tracked or {})
+    else:
+        record["tracking"] = {"enabled": False}
+    stored = await store.add_model(user["id"], record, artifact)
+    return public_model(stored)
+
+
+@router.get("/ml/models")
+async def list_ml_models(user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> List[Dict[str, Any]]:
+    return await store.list_models(user["id"])
+
+
+@router.get("/ml/models/{model_id}")
+async def get_ml_model(
+    model_id: str = Path(min_length=1, max_length=64),
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    record = await store.get_model(user["id"], model_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return public_model(record)
+
+
+async def _model_signal(store: Store, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    artifact = await store.get_artifact(record)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Model artifact not found")
+    chart = await market.get_daily_history(record["symbol"], "1y")
+    bars = bars_from_points(chart.get("points", []))
+    from backend.ml.inference import predict_latest  # lazy: keeps scikit-learn off the cold-start path
+
+    try:
+        result = await asyncio.to_thread(predict_latest, record, artifact, bars)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result | {"dataSource": chart.get("source", "live")}
+
+
+@router.post("/ml/predict")
+async def predict_ml(
+    payload: PredictRequest,
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    if payload.modelId:
+        record = await store.get_model(user["id"], payload.modelId)
+    elif payload.symbol:
+        record = await store.latest_model(user["id"], payload.symbol)
+    else:
+        raise HTTPException(status_code=422, detail="Provide modelId or symbol")
+    if not record:
+        raise HTTPException(status_code=404, detail="No trained model found; train one first")
+    return await _model_signal(store, user["id"], record)
+
+
+@router.get("/status")
+async def system_status(
+    user: Dict[str, Any] = Depends(get_current_user),
+    store: Store = Depends(get_store),
+) -> Dict[str, Any]:
+    """Operational snapshot for the console. Never includes DSNs, keys, or error text."""
+    _ = user
+    return {
+        "version": app.version,
+        "serverTime": now().isoformat(),
+        "store": "mongo" if isinstance(store, MongoStore) else "memory",
+        "strictDb": settings.strict_db,
+        "devEndpoints": dev_endpoints_enabled(),
+        "copilotConfigured": openai_client is not None,
+        "experimentTracking": experiment_tracking.enabled(),
+        "offlineMarketDataAllowed": settings.allow_offline_market_data,
+        "marketData": dict(MARKET_HEALTH),
+        "rateLimits": {
+            "authPerMinute": settings.auth_rate_limit_per_minute,
+            "marketPerMinute": settings.market_rate_limit_per_minute,
+            "shared": not settings.rate_limit_storage_uri.startswith("memory://"),
+        },
+    }
+
+
+@router.get("/health")
 async def health() -> Dict[str, Any]:
     return {"status": "ok", "timestamp": now().isoformat()}
 
 
-def build_offline_quotes(symbols: List[str]) -> List[Dict[str, Any]]:
-    timestamp = now().isoformat()
-    fallback: List[Dict[str, Any]] = []
-    for symbol in symbols:
-        base = OFFLINE_QUOTES.get(symbol.upper())
-        if not base:
-            base = {"symbol": symbol.upper(), "price": 100.0, "previousClose": 100.0, "currency": "USD"}
-        price = float(base.get("price", 0.0))
-        previous = float(base.get("previousClose", price))
-        change = price - previous if previous else 0.0
-        change_percent = (change / previous) * 100 if previous else 0.0
-        fallback.append(
-            {
-                "symbol": base.get("symbol", symbol.upper()),
-                "price": price,
-                "change": change,
-                "changePercent": change_percent,
-                "previousClose": previous,
-                "currency": base.get("currency", "USD"),
-                "updated": timestamp,
-            }
-        )
-    return fallback
-
-
-def build_offline_chart(symbol: str, range_value: str, interval: str) -> Dict[str, Any]:
-    points: List[Dict[str, Any]] = []
-    base_price = float(OFFLINE_QUOTES.get(symbol.upper(), {}).get("price", 100.0))
-    for idx in range(60):
-        close = base_price * (1 + 0.002 * (idx - 30) / 30)
-        high = close * 1.01
-        low = close * 0.99
-        open_price = (high + low) / 2
-        points.append(
-            {
-                "timestamp": (now() - timedelta(days=60 - idx)).isoformat(),
-                "open": open_price,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": 1000000 + idx * 2500,
-            }
-        )
-    return {
-        "symbol": symbol.upper(),
-        "points": points,
-        "timezone": "UTC",
-        "currency": OFFLINE_QUOTES.get(symbol.upper(), {}).get("currency", "USD"),
-        "range": range_value,
-        "interval": interval,
-        "previousClose": points[0]["close"],
-    }
-
-
-def build_offline_search(query: str) -> List[Dict[str, Any]]:
-    matches: List[Dict[str, Any]] = []
-    lowered = query.lower()
-    for symbol, info in OFFLINE_QUOTES.items():
-        label = info.get("symbol", symbol)
-        if lowered in label.lower():
-            matches.append(
-                {
-                    "symbol": label,
-                    "shortName": label,
-                    "exchange": "OFFLINE",
-                    "type": "EQUITY",
-                }
-            )
-    if not matches:
-        matches.append(
-            {
-                "symbol": query.upper(),
-                "shortName": query.upper(),
-                "exchange": "OFFLINE",
-                "type": "EQUITY",
-            }
-        )
-    return matches
-
-
-def fetch_quotes_with_yfinance(symbols: List[str]) -> List[Dict[str, Any]]:
-    if yf is None:
-        return []
-    results: List[Dict[str, Any]] = []
-    timestamp = now().isoformat()
-    for symbol in symbols:
-        try:
-            ticker = yf.Ticker(symbol)
-            info = getattr(ticker, "fast_info", None)
-            price = None
-            previous = None
-            currency = None
-            if info is not None:
-                try:
-                    price = getattr(info, "last_price", None)
-                except Exception:
-                    pass
-                if price is None:
-                    try:
-                        price = getattr(info, "last_close", None)
-                    except Exception:
-                        pass
-                try:
-                    previous = getattr(info, "previous_close", None)
-                except Exception:
-                    pass
-                try:
-                    currency = getattr(info, "currency", None)
-                except Exception:
-                    pass
-            if price is None:
-                history = ticker.history(period="5d", interval="1d")
-                if not history.empty:
-                    price = float(history["Close"].iloc[-1])
-                    previous = float(history["Close"].iloc[-2]) if len(history) > 1 else price
-            if price is None:
-                continue
-            if previous is None:
-                previous = price
-            change = price - previous if previous else 0.0
-            change_percent = (change / previous) * 100 if previous else 0.0
-            results.append(
-                {
-                    "symbol": symbol.upper(),
-                    "price": float(price),
-                    "change": float(change),
-                    "changePercent": float(change_percent),
-                    "previousClose": float(previous) if previous is not None else None,
-                    "currency": currency,
-                    "updated": timestamp,
-                }
-            )
-        except Exception as exc:
-            logger.warning("yfinance quote for %s failed: %s", symbol, exc)
-            continue
-    return results
-
-
-def fetch_chart_with_yfinance(symbol: str, range_value: str, interval: str) -> Dict[str, Any]:
-    if yf is None:
-        return build_offline_chart(symbol, range_value, interval)
-    ticker = yf.Ticker(symbol)
-    history = ticker.history(period=range_value, interval=interval)
-    if history.empty:
-        raise ValueError("No history returned")
-    points: List[Dict[str, Any]] = []
-    for timestamp, row in history.iterrows():
-        open_price = float(row.get("Open", float("nan")))
-        high = float(row.get("High", float("nan")))
-        low = float(row.get("Low", float("nan")))
-        close = float(row.get("Close", float("nan")))
-        volume_val = row.get("Volume", float("nan"))
-        volume = None if math.isnan(volume_val) else int(volume_val)
-        if any(math.isnan(value) for value in (open_price, high, low, close)):
-            continue
-        if timestamp.tzinfo is None:
-            ts = timestamp.replace(tzinfo=timezone.utc)
-        else:
-            ts = timestamp.tz_convert(timezone.utc)
-        points.append(
-            {
-                "timestamp": ts.isoformat(),
-                "open": open_price,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": volume,
-            }
-        )
-    currency = None
-    info = getattr(ticker, "fast_info", None)
-    if info:
-        try:
-            currency = getattr(info, "currency", None)
-        except Exception:
-            pass
-    return {
-        "symbol": symbol.upper(),
-        "points": points,
-        "timezone": str(history.index.tz) if history.index.tz is not None else "UTC",
-        "currency": currency,
-        "range": range_value,
-        "interval": interval,
-        "previousClose": points[0]["close"] if points else None,
-    }
-
-
-def fetch_search_with_yfinance(query: str) -> List[Dict[str, Any]]:
-    if yf is None:
-        return []
-    try:
-        search_result = yf.search(query)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("yfinance search raised: %s", exc)
-        search_result = None
-    items: list = []
-    if isinstance(search_result, dict):
-        items = search_result.get("quotes", [])
-    elif isinstance(search_result, list):
-        items = search_result
-    matches: List[Dict[str, Any]] = []
-    for item in items[:10]:
-        if not isinstance(item, dict):
-            continue
-        symbol = item.get('symbol')
-        if not symbol:
-            continue
-        matches.append({
-            'symbol': symbol,
-            'shortName': item.get('shortname') or item.get('shortName') or item.get('longname') or item.get('longName'),
-            'longName': item.get('longname') or item.get('longName'),
-            'exchange': item.get('exchange'),
-            'type': item.get('quoteType'),
-        })
-    if matches:
-        return matches
-    return build_offline_search(query)
+app.include_router(router)

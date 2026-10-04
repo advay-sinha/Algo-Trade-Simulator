@@ -15,9 +15,26 @@ import type {
   SparklineSeries,
   SearchResult,
   ChartResponse,
+  SystemStatus,
+  TrainingRun,
+  StrategySpec,
+  BacktestRequestPayload,
+  BacktestRecord,
+  BacktestListItem,
+  BacktestTrade,
+  RiskReport,
+  FeatureCatalogEntry,
+  FeaturesRequestPayload,
+  DatasetPreview,
+  TrainModelPayload,
+  ModelRecord,
+  ModelSummary,
+  ModelSignal,
 } from "./types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+// Same-origin by default: the Vite dev server proxies /api to the backend, and production
+// serves the SPA and the API from one domain. Override only for a separately hosted API.
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "/api").replace(/\/+$/, "");
 
 interface RequestOptions {
   method?: string;
@@ -39,38 +56,56 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch {
+    // Network failure (server down, offline, DNS). Status 0 lets callers explain it.
+    throw new ApiError("Network request failed", 0);
+  }
 
   if (response.status === 204) {
     return undefined as T;
   }
 
   const text = await response.text();
-  const data = text ? JSON.parse(text) : undefined;
+  let data: { detail?: unknown } | undefined;
+  try {
+    data = text ? JSON.parse(text) : undefined;
+  } catch {
+    data = undefined;
+  }
 
-
-if (response.status === 401) {
-  const unauthorizedDetail = data?.detail ?? response.statusText;
-  if (typeof window !== "undefined") {
+  if (response.status === 401 && typeof window !== "undefined") {
     window.localStorage.removeItem("algo-trade-session");
   }
-  const unauthorizedError = new Error(
-    typeof unauthorizedDetail === "string" ? unauthorizedDetail : JSON.stringify(unauthorizedDetail),
-  );
-  (unauthorizedError as Error & { status?: number }).status = 401;
-  throw unauthorizedError;
-}
 
   if (!response.ok) {
     const detail = data?.detail ?? response.statusText;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new ApiError(
+      typeof detail === "string" ? detail : "Request validation failed",
+      response.status,
+      response.headers.get("Retry-After"),
+    );
   }
 
   return data as T;
+}
+
+/** Error carrying the HTTP status (0 = network failure) so the UI can pick recovery copy. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryAfter: string | null = null,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
 export interface AuthResponse {
@@ -102,17 +137,21 @@ export function login(payload: LoginPayload) {
   return request<AuthResponse>("/auth/login", { method: "POST", body: payload });
 }
 
+export function logout(token: string) {
+  return request<void>("/auth/logout", { method: "POST", token });
+}
+
 export function devAuthBypass(payload?: DevAuthBypassPayload) {
   return request<AuthResponse>("/dev/auth/bypass", { method: "POST", body: payload });
 }
 
-export function fetchWatchlist(symbols?: string[]) {
-  const query = symbols?.length ? `?symbols=${symbols.join(",")}` : "";
-  return request<MarketQuote[]>(`/market/watchlist${query}`);
+export function fetchWatchlist(token: string, symbols?: string[]) {
+  const query = symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
+  return request<MarketQuote[]>(`/market/watchlist${query}`, { token });
 }
 
-export function fetchQuote(symbol: string) {
-  return request<MarketQuote>(`/market/quote/${encodeURIComponent(symbol)}`);
+export function fetchQuote(token: string, symbol: string) {
+  return request<MarketQuote>(`/market/quote/${encodeURIComponent(symbol)}`, { token });
 }
 
 export function fetchSimulations(token: string) {
@@ -163,13 +202,21 @@ export function askChat(token: string, payload: ChatRequestPayload) {
 }
 
 export function fetchSparkline(token: string, symbols?: string[]) {
-  const params = symbols?.length ? `?symbols=${symbols.join(",")}` : "";
+  const params = symbols?.length ? `?symbols=${encodeURIComponent(symbols.join(","))}` : "";
   return request<SparklineSeries[]>(`/analytics/sparkline${params}`, { token });
 }
 
 export function searchSymbols(token: string, query: string) {
   const encoded = encodeURIComponent(query);
   return request<SearchResult[]>(`/market/search?q=${encoded}`, { token });
+}
+
+export function fetchStatus(token: string) {
+  return request<SystemStatus>("/status", { token });
+}
+
+export function fetchTrainingRuns(token: string) {
+  return request<TrainingRun[]>("/analytics/training", { token });
 }
 
 export function fetchChart(token: string, symbol: string, options?: { range?: string; interval?: string }) {
@@ -183,4 +230,52 @@ export function fetchChart(token: string, symbol: string, options?: { range?: st
   const query = params.toString();
   const path = `/market/chart/${encodeURIComponent(symbol)}${query ? `?${query}` : ""}`;
   return request<ChartResponse>(path, { token });
+}
+
+export function fetchRunnableStrategies() {
+  return request<StrategySpec[]>("/strategies");
+}
+
+export function runBacktest(token: string, payload: BacktestRequestPayload) {
+  return request<BacktestRecord>("/backtest/run", { method: "POST", body: payload, token });
+}
+
+export function fetchBacktests(token: string) {
+  return request<BacktestListItem[]>("/backtests", { token });
+}
+
+export function fetchBacktest(token: string, id: string) {
+  return request<BacktestRecord>(`/backtest/${encodeURIComponent(id)}`, { token });
+}
+
+export function fetchBacktestTrades(token: string, id: string) {
+  return request<BacktestTrade[]>(`/backtest/${encodeURIComponent(id)}/trades`, { token });
+}
+
+export function fetchBacktestRisk(token: string, id: string) {
+  return request<RiskReport>(`/backtest/${encodeURIComponent(id)}/risk`, { token });
+}
+
+export function fetchFeatureCatalog() {
+  return request<FeatureCatalogEntry[]>("/ml/feature-catalog");
+}
+
+export function previewDataset(token: string, payload: FeaturesRequestPayload) {
+  return request<DatasetPreview>("/ml/features", { method: "POST", body: payload, token });
+}
+
+export function trainModel(token: string, payload: TrainModelPayload) {
+  return request<ModelRecord>("/ml/train", { method: "POST", body: payload, token });
+}
+
+export function fetchModels(token: string) {
+  return request<ModelSummary[]>("/ml/models", { token });
+}
+
+export function fetchModel(token: string, id: string) {
+  return request<ModelRecord>(`/ml/models/${encodeURIComponent(id)}`, { token });
+}
+
+export function predictWithModel(token: string, body: { modelId?: string; symbol?: string }) {
+  return request<ModelSignal>("/ml/predict", { method: "POST", body, token });
 }

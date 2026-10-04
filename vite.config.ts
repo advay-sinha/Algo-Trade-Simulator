@@ -17,6 +17,21 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // Same-origin API in development, mirroring production where the SPA and /api share a domain.
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+    },
+  },
+  preview: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
+    },
   },
   build: {
     outDir: resolve(__dirname, "dist"),

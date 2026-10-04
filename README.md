@@ -1,177 +1,256 @@
-# Algo Trade Simulator
+# Algo Trade Lab
 
-A full-stack algorithmic trading simulation platform that lets you research live markets, train and backtest algorithmic strategies, and manage simulated portfolios — all without risking real capital. The app pairs a FastAPI backend with a React + Vite frontend, sources market data from Yahoo Finance, and uses an OpenAI-backed copilot (with heuristic fallbacks) to assist with research and automation.
+A full-stack quantitative research and trading simulation platform for developing, testing, and monitoring algorithmic trading strategies without risking real capital. The system pairs a FastAPI backend with a React + Vite + TypeScript frontend, sources live market data from Yahoo Finance, persists research in MongoDB, and includes a research chat copilot.
 
-## What the project does
+The project is evolving from a trading simulator into a modular quant research platform — see the [Roadmap](#roadmap) for what is implemented today versus planned.
 
-- Streams live quotes, charts, and intraday stats from Yahoo Finance for any searchable ticker.
-- Trains an SMA crossover strategy on five years of historical data and serves live signals against the latest market regime.
-- Persists user accounts, sessions, and simulations in MongoDB (or an in-memory store for quick local runs).
-- Provides a hybrid chatbot copilot that can answer research questions and spin up simulations from natural-language prompts (e.g. "create a simulation for AAPL with 25k").
-- Surfaces portfolio stats, trained strategies, and recent results through a home analytics dashboard.
-- Restores sessions via browser storage so signed-in users can resume where they left off.
+## Current features
+
+- **Interactive research console** — a section-based interface: overview dashboard, live monitoring, one page per engine, a training/testing/validation lab, research history, price history with CSV export, and a safety page. Every section opens with a summary and "how it works" steps, and every metric and control has an explanation available on hover, keyboard focus, or tap. Light and dark themes; works from phone to desktop widths.
+- **Live market data** — quotes refreshed every 30 seconds while visible, ticker search, candlestick charts, and sparklines for any searchable symbol. Every value carries a source flag (`live`, `offline`, `synthetic`), and anything that isn't live is visibly badged.
+- **Backtesting engine** — replay SMA crossover, time-series momentum, or mean-reversion strategies over 6 months to 5 years of daily bars. Signals execute at the next day's open (no lookahead), every fill pays commission and slippage, and each run reports equity vs buy-and-hold, drawdown, a full trade log, and its assumptions. Runs are saved per user.
+- **Risk analytics** — every backtest stores a risk report computed from the post-cost equity curve: Sharpe, Sortino, CAGR, annualized volatility, max drawdown with its duration, win rate and profit factor from the trade log, plus beta, alpha, and correlation against a benchmark index (SPY by default, ^NSEI for Indian listings) over the identical trading days, with a configurable risk-free rate. Metrics that can't be computed honestly are returned as null with a reason — never NaN.
+- **Feature engineering & dataset builder** — turn daily bars into a model-ready dataset: returns, lagged returns, rolling volatility, RSI, MACD, Bollinger position, moving-average ratios, volume, and momentum features; direction, return-bucket, or volatility-regime labels with a configurable horizon; and a time-ordered train / embargo / test split. Every feature uses only past data and every label only future data (enforced by automated tests). The preview reports shape, split boundaries, label balance, and training-set feature statistics.
+- **ML model lab** — train logistic regression, random forest, or gradient-boosting classifiers on the leakage-free datasets. Each run is judged on a later, unseen window: accuracy next to the majority-class baseline, ROC-AUC, precision / recall / F1, a confusion matrix, and a cost-aware backtest of the model's signals against buy-and-hold. Every run is saved in a per-user model registry (features, window, hyperparameters, metrics, artifact) and can produce a live signal traceable to the exact model. Optional MLflow experiment tracking (works with a free hosted DagsHub tracking server).
+- **Strategy lab** — a quick zero-cost SMA crossover backtest over six months of daily data with real (in-sample) return, drawdown, Sharpe, and win rate, a price-with-averages chart, and a naive momentum signal.
+- **Simulations** — create, track, update, and delete simulated portfolio runs per user.
+- **Accounts & sessions** — email/password signup and login, bcrypt-hashed passwords, bearer-token sessions with 7-day expiry, server-side logout, session tokens stored only as SHA-256 hashes, and per-client rate limiting on authentication.
+- **Analytics dashboard** — simulation totals, trained strategies, recent simulations, and one-month watchlist trends.
+- **Research copilot** — chat assistant for market research questions (requires an OpenAI API key; degrades gracefully without one).
+- **Flexible persistence** — MongoDB (Atlas or local) for durable storage, or a zero-setup in-memory mode for local development; a strict mode refuses to run without the database instead of silently losing data.
+- **Input hardening** — ticker symbols, chart ranges, and simulation states are validated before any outbound request; error responses never expose internal details.
 
 ## Tech stack
 
-| Area        | Technology |
-|-------------|------------|
-| Frontend    | React + Vite + TypeScript |
-| Backend     | FastAPI, Motor (async MongoDB), Passlib |
-| Database    | MongoDB (Atlas or local) — optional in-memory fallback |
-| Market data | Yahoo Finance quote & chart APIs (via `requests`) |
-| AI copilot  | OpenAI Chat Completions with configurable model fallbacks |
+| Area | Technology |
+|---|---|
+| Frontend | React 18, Vite 5, TypeScript, React Router, Radix UI primitives (dialog, popover, tabs, tooltip), TradingView Lightweight Charts |
+| Backend | FastAPI, Pydantic, Motor (async MongoDB), Passlib |
+| Database | MongoDB — optional in-memory fallback for development |
+| Market data | Yahoo Finance via `yfinance` with raw-API and offline fallbacks |
+| Copilot | OpenAI Chat Completions with configurable model fallbacks |
 
 ## Project structure
 
 ```
 Algo-Trade-Simulator/
 ├── backend/                 # FastAPI service
-│   ├── main.py              # App entrypoint, routes, services, DB wiring
+│   ├── main.py              # App entrypoint, routes, stores, market data
+│   ├── config.py            # Settings, .env loading, platform detection
+│   ├── models/common.py     # Shared validated types (symbols, statuses, password policy)
+│   ├── models/backtest.py   # Backtest request model
+│   ├── services/            # Market data (cached, async), backtesting engine, rate limiting, token hashing
+│   ├── strategies/          # Strategy interface + registry: buy-and-hold, SMA crossover, momentum, mean reversion
+│   ├── analytics/           # Risk metrics (metrics.py) and risk report assembly (risk.py)
+│   ├── ml/                  # Features, datasets, training, evaluation, inference
+│   ├── tests/               # pytest suite (features, backtesting, metrics, ML, experiment tracking)
+│   ├── requirements-dev.txt # Test-only dependencies
 │   ├── requirements.txt     # Python dependencies
-│   ├── test.py              # MongoDB connectivity check
-│   └── ctest.py             # Auxiliary connectivity / sanity script
+│   └── test.py              # MongoDB connectivity check
 ├── client/                  # React + Vite frontend
 │   ├── index.html
 │   └── src/
 │       ├── main.tsx         # Vite entrypoint
-│       ├── App.tsx          # Top-level routing & layout
-│       ├── api.ts           # Backend API client
+│       ├── App.tsx          # Router, lazy-loaded routes, auth gate
+│       ├── api.ts           # Backend API client (all HTTP goes through here)
 │       ├── types.ts         # Shared TypeScript types
-│       ├── index.css
-│       └── components/
-│           ├── HomeOverview.tsx
-│           ├── Dashboard.tsx
-│           ├── LiveMarketPage.tsx
-│           ├── Watchlist.tsx
-│           ├── SparklineChart.tsx
-│           ├── StrategyCatalog.tsx
-│           ├── StrategyTrainer.tsx
-│           ├── SimulationForm.tsx
-│           ├── SimulationList.tsx
-│           ├── ChatbotPanel.tsx
-│           ├── LoginForm.tsx
-│           └── SignupForm.tsx
+│       ├── content/         # Section descriptions and the metric glossary
+│       ├── lib/             # Session, data hooks, formatting, errors, theme
+│       ├── styles/          # Design tokens (light/dark) and component styles
+│       ├── pages/           # One module per route
+│       └── components/      # ui/ primitives, charts/, layout/ shell, copilot/ drawer
 ├── package.json             # Frontend scripts & dependencies
-├── vite.config.ts           # Vite dev server / proxy config
+├── vite.config.ts
 ├── tsconfig.json
+├── project_overview.md      # Architecture, API surface, data model, roadmap detail
 └── README.md
 ```
+
+As the roadmap progresses, the backend continues splitting into modules: `ml/` (features, training, inference, registry), `llm/` (copilot tools), `analytics/` (risk, metrics, reports), and `tests/`.
 
 ## Getting started
 
 ### Prerequisites
 
-- Node.js 18 or later
-- Python 3.11 or later
-- A running MongoDB instance (Atlas or local) — optional if you use the in-memory mode
+- Node.js 18+
+- Python 3.11+
+- MongoDB is **optional** — in-memory mode needs no database at all.
 
-### Backend setup
+### Backend
 
 1. Create a virtual environment and install dependencies:
    ```bash
    cd backend
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   python -m venv venv
+   venv\Scripts\activate        # Windows
+   # source venv/bin/activate   # macOS/Linux
    pip install -r requirements.txt
    ```
-2. (Optional) Create a `.env` file in `backend/` to override defaults — see [Configuration](#configuration).
-3. Start the FastAPI server from the repository root:
+2. Start the API from the repository root:
    ```bash
    uvicorn backend.main:app --reload --port 8000
    ```
-   > To run without MongoDB during development, export `USE_IN_MEMORY_DB=true`. All data is ephemeral and resets on restart.
-4. (Optional) Verify MongoDB connectivity:
-   ```bash
-   python backend/test.py
-   ```
+   For a zero-setup run, set `USE_IN_MEMORY_DB=true` first — everything works, data resets on restart.
 
-The API will be available at `http://localhost:8000`, with auto-generated Swagger docs at `/docs`.
+   The API serves under `http://localhost:8000/api` with Swagger docs at `/api/docs`.
 
-### Frontend setup
+### Frontend
 
-1. Install dependencies from the repository root:
+1. From the repository root:
    ```bash
    npm install
-   ```
-2. Start the Vite dev server:
-   ```bash
    npm run dev
    ```
-3. Open `http://localhost:5173`. The frontend proxies API requests to `http://localhost:8000` by default. Override with `VITE_API_BASE_URL` in `client/.env` if needed.
+2. Open `http://localhost:5173`. The dev server proxies `/api` to the backend on port 8000, so the browser talks to a single origin — no CORS setup needed.
 
 ## Configuration
 
-The backend recognises the following environment variables:
+**You do not need any `.env` file to start.** The defaults run the full app in development mode. Create configuration only when you enable the specific service that needs it.
+
+The backend reads `backend/.env` on startup when present. Variables already set in the process environment take precedence, so hosted deployments configure everything through their environment settings.
+
+### When you want durable storage (MongoDB)
+
+Create `backend/.env` (or export the variables) once you have a MongoDB instance:
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `MONGO_URL` | Preferred connection string for MongoDB | unset (falls back to defaults) |
-| `MONGODB_URI` | Alternate connection string (used if `MONGO_URL` is unset) | `mongodb://localhost:27017` |
-| `MONGO_URI` | Legacy connection string key (used if the others are unset) | unset |
+|---|---|---|
+| `MONGO_URL` | MongoDB connection string (also accepts `MONGODB_URI` / `MONGO_URI`) | `mongodb://localhost:27017` |
 | `MONGODB_DB` | Database name | `algo-trade-simulator` |
-| `FRONTEND_ORIGIN` | Allowed CORS origin for the web app | `http://localhost:5173` |
-| `SESSION_DURATION_DAYS` | Optional override for session lifetime in days | `7` |
-| `ENABLE_DEV_ENDPOINTS` | Enables development-only routes such as the login bypass helper | `false` |
-| `USE_IN_MEMORY_DB` | Stores users, sessions, and simulations in memory for local testing (no MongoDB required) | `false` |
-| `YAHOO_USER_AGENT` | Optional override for the header sent to Yahoo Finance endpoints | `Mozilla/5.0 (compatible; AlgoTradeSimulator/1.0; +https://example.com)` |
-| `OPENAI_API_KEY` | API key used for chatbot completions | unset |
-| `OPENAI_MODEL` | Chat completion model identifier | `gpt-4o-mini` |
-| `OPENAI_TEMPERATURE` | Sampling temperature for completions | `0.3` |
-| `OPENAI_BASE_URL` | (Optional) Override base URL for Azure/OpenAI-compatible endpoints | unset |
-| `OPENAI_ORG` | (Optional) Organisation ID when using OpenAI accounts | unset |
-| `OPENAI_MODEL_FALLBACKS` | Comma-separated list of backup models tried if the primary model fails | unset |
+| `USE_IN_MEMORY_DB` | Skip MongoDB entirely; ephemeral storage | `false` |
 
-> **Tip:** When deploying, supply a production MongoDB connection string and set `FRONTEND_ORIGIN` to your hosted frontend URL.
+| `STRICT_DB` | Fail requests with 503 instead of falling back to in-memory storage when MongoDB is unavailable | `false` locally, `true` on Vercel |
+| `MONGO_MAX_POOL_SIZE` | Connection pool size per process | `5` |
 
-> If multiple Mongo variables are set, `MONGO_URL` wins, followed by `MONGODB_URI`, then the legacy `MONGO_URI`.
+Verify connectivity with `python backend/test.py`. The database connection is created on the first request. Without `STRICT_DB`, an unreachable MongoDB logs a warning and the server falls back to the in-memory store — check the log to confirm which store is active.
 
-### Frontend environment
+### When you want the chat copilot
 
-The Vite frontend honours the following environment variables (set in `client/.env`):
+The copilot needs an OpenAI API key. Add to `backend/.env`:
 
 | Variable | Description | Default |
-|----------|-------------|---------|
-| `VITE_API_BASE_URL` | Base URL for API requests | `http://localhost:8000` |
-| `VITE_ENABLE_LOGIN_BYPASS` | Auto-sign in via the dev bypass endpoint when set to `true` | `false` |
-| `VITE_LOGIN_BYPASS_EMAIL` | Optional email used when creating the bypass session | unset (backend default) |
-| `VITE_LOGIN_BYPASS_NAME` | Optional name applied to the bypass session | unset (backend default) |
+|---|---|---|
+| `OPENAI_API_KEY` | API key from platform.openai.com | unset (chat replies with a "not configured" notice) |
+| `OPENAI_MODEL` | Chat model identifier | `gpt-4o-mini` |
+| `OPENAI_MODEL_FALLBACKS` | Comma-separated backup models tried on rate limits | unset |
+| `OPENAI_TEMPERATURE` | Sampling temperature | `0.3` |
+| `OPENAI_BASE_URL` / `OPENAI_ORG` | Optional endpoint/organization overrides | unset |
 
-> To skip the login page during development, run the backend with `ENABLE_DEV_ENDPOINTS=true` and set `VITE_ENABLE_LOGIN_BYPASS=true` before starting the Vite dev server.
-> You can also navigate to `http://localhost:5173/dev/auth/bypass` while the Vite dev server is running to trigger the bypass on demand.
+Every other feature works without this key.
+
+### General backend options
+
+| Variable | Description | Default |
+|---|---|---|
+| `CORS_ORIGINS` | Comma-separated allowed origins (only needed when the frontend is served from a different origin) | unset |
+| `FRONTEND_ORIGIN` | Single allowed origin used when `CORS_ORIGINS` is unset | `http://localhost:5173` |
+| `SESSION_DURATION_DAYS` | Session lifetime | `7` |
+| `ENABLE_DEV_ENDPOINTS` | Enables the development login-bypass route — local dev only; always disabled in production deployments | `false` |
+| `AUTH_RATE_LIMIT_PER_MINUTE` | Signup / login attempts allowed per client per minute (each route separately) | `5` |
+| `MARKET_RATE_LIMIT_PER_MINUTE` | Watchlist / quote requests allowed per client per minute | `60` |
+| `ALLOW_OFFLINE_MARKET_DATA` | Serve clearly flagged fallback quotes/charts when the provider is unreachable; `false` returns an error instead | `true` |
+| `RATE_LIMIT_STORAGE_URI` | Rate-limit storage backend (`memory://` today; shared storage planned for multi-instance hosting) | `memory://` |
+| `YAHOO_USER_AGENT` | User-Agent for Yahoo Finance requests | preset |
+
+### When you want experiment tracking (MLflow)
+
+Training runs can also be logged to any MLflow tracking server. A free option is a [DagsHub](https://dagshub.com) repository, which provides a hosted MLflow server per repo. Add to `backend/.env` (or the hosting provider's environment settings):
+
+| Variable | Description | Default |
+|---|---|---|
+| `MLFLOW_TRACKING_URI` | Tracking server URL, e.g. `https://dagshub.com/<user>/<repo>.mlflow` | unset (tracking off) |
+| `MLFLOW_TRACKING_USERNAME` | Tracking server username (DagsHub: your username) | unset |
+| `MLFLOW_TRACKING_PASSWORD` | Tracking server password or token (DagsHub: an access token) | unset |
+| `MLFLOW_EXPERIMENT_NAME` | Experiment runs are grouped under | `algo-trade-lab` |
+
+Models are always trained and saved without it; tracking is a best-effort extra.
+
+### Frontend (`client/.env`)
+
+| Variable | Description | Default |
+|---|---|---|
+| `VITE_API_BASE_URL` | API base URL — leave unset to use the same-origin `/api` path | `/api` |
+| `VITE_ENABLE_LOGIN_BYPASS` | Auto-sign-in via the dev bypass (needs `ENABLE_DEV_ENDPOINTS=true` on the backend) | `false` |
+| `VITE_LOGIN_BYPASS_EMAIL` / `VITE_LOGIN_BYPASS_NAME` | Identity used by the bypass session | backend defaults |
 
 ## API overview
 
-The FastAPI server exposes REST endpoints. Key routes include:
+All routes are served under the `/api` prefix. Authenticated routes expect `Authorization: Bearer <token>`; tokens are issued by signup/login, expire after 7 days (configurable), and are revoked by logout. Authentication and quote routes are rate limited per client (HTTP 429 with `Retry-After`).
 
-- `POST /auth/signup` — register a new user and return an access token
-- `POST /auth/login` — authenticate an existing user
-- `GET /auth/session` — validate a bearer token and retrieve the current user
-- `GET /market/watchlist` — fetch live quotes for a comma-separated list of symbols
-- `GET /market/quote/{symbol}` — fetch a single market quote
-- `GET /market/search` — look up tickers and exchanges that match a user query
-- `GET /market/chart/{symbol}` — return candlestick-ready chart data with configurable range and interval
-- `GET /simulations` — list saved simulations for the authenticated user
-- `POST /simulations` — create a new simulation for the current user
-- `PATCH /simulations/{id}` — update status or notes for a simulation
-- `DELETE /simulations/{id}` — remove a simulation
-- `GET /analytics/overview` — retrieve aggregated dashboard metrics for the signed-in user
-- `GET /analytics/strategies` — list the built-in strategy catalogue shown on the info page
-- `POST /analytics/train` — backtest/train the SMA crossover strategy on the last five years of data
-- `POST /analytics/predict` — generate a live signal using the last trained strategy
-- `GET /analytics/sparkline` — return sparkline-friendly price series for requested symbols
-- `POST /chat` — query the hybrid chatbot backed by OpenAI completions
+| Route | Purpose | Auth |
+|---|---|---|
+| `POST /api/auth/signup` | Register and receive a session token (password ≥ 8 characters) | — |
+| `POST /api/auth/login` | Authenticate an existing user | — |
+| `POST /api/auth/logout` | Revoke the current session | ✓ |
+| `GET /api/market/watchlist` | Live quotes for a symbol list | ✓ |
+| `GET /api/market/quote/{symbol}` | Single quote | ✓ |
+| `GET /api/market/search?q=` | Ticker/exchange search | ✓ |
+| `GET /api/market/chart/{symbol}` | OHLCV chart data (range/interval params) | ✓ |
+| `GET /api/simulations` / `POST /api/simulations` | List / create simulations | ✓ |
+| `PATCH /api/simulations/{id}` / `DELETE /api/simulations/{id}` | Update (status: active / paused / completed / archived) / remove a simulation | ✓ |
+| `GET /api/analytics/overview` | Dashboard aggregates | ✓ |
+| `GET /api/analytics/strategies` | Built-in strategy catalogue | — |
+| `GET /api/strategies` | Strategies the backtester can run, with parameter schemas | — |
+| `POST /api/backtest/run` | Run and save a backtest (symbol, strategy, params, range, capital, costs, slippage, optional benchmark and risk-free rate); returns the result with its risk report | ✓ |
+| `GET /api/backtests` | Your saved backtests (summaries) | ✓ |
+| `GET /api/backtest/{id}` | One saved backtest with equity, drawdown, and buy-and-hold series | ✓ |
+| `GET /api/backtest/{id}/risk` | Stored risk report: metrics, drawdown episode, buy-and-hold and benchmark comparison | ✓ |
+| `GET /api/backtest/{id}/trades` | Trade log of a saved backtest | ✓ |
+| `POST /api/analytics/train` | Lab: zero-cost SMA crossover backtest on 6 months of daily data | ✓ |
+| `POST /api/analytics/predict` | Lab signal: from your latest ML model for the symbol when one exists, otherwise naive momentum (labeled) | ✓ |
+| `GET /api/analytics/sparkline` | Compact price series for the watchlist | ✓ |
+| `GET /api/analytics/training` | Past training runs, newest first | ✓ |
+| `GET /api/ml/feature-catalog` | Feature generators with groups, descriptions, defaults | — |
+| `POST /api/ml/features` | Build a leakage-free dataset preview (features, label, split, balance); nothing stored | ✓ |
+| `POST /api/ml/train` | Train, evaluate on the unseen window, and register a model | ✓ |
+| `GET /api/ml/models` / `GET /api/ml/models/{id}` | Model registry list / full report | ✓ |
+| `POST /api/ml/predict` | Live signal from a registered model (by id, or latest for a symbol) | ✓ |
+| `GET /api/status` | Operational snapshot: store type, market-data source health, copilot configured, rate limits (no secrets) | ✓ |
+| `POST /api/chat` | Research copilot | ✓ |
+| `GET /api/health` | Liveness check | — |
 
-Requests that require authentication expect an `Authorization: Bearer <token>` header. Tokens automatically expire after seven days.
+## Roadmap
 
-## Strategy lab & chatbot
+Development proceeds in phases; each phase ships working, verifiable functionality before the next begins.
 
-1. Ensure the backend can reach Yahoo Finance (no VPN/proxy required) and that `OPENAI_API_KEY` is set for the backend service. Optionally add `OPENAI_MODEL_FALLBACKS` (e.g. `gpt-4o,gpt-3.5-turbo`) so the assistant can fall back when a model hits account limits.
-2. Train a strategy from the **Simulations** page or via `POST /analytics/train` with a symbol plus short/long SMA windows (default 20/60).
-3. Request a fresh prediction from the **Home** page or `POST /analytics/predict` to evaluate the current market regime.
-4. Use the **Chatbot** page to ask questions, run quick research, or say "create a simulation for AAPL with 25k" to auto-spin a test scenario.
+| Phase | Focus | Key deliverables | Status |
+|---|---|---|---|
+| 0 | Security & deploy foundations | Hashed session storage, logout/revocation, input validation, rate limiting, error-message hygiene; `/api` route prefix, lazy database initialization, serverless-safe file handling | Done |
+| 1 | Interactive research console | Section-based UI — live monitoring, one page per engine, training/testing/validation lab, history & past data, safety — with in-context explanations for every feature and metric | Done |
+| 2 | Backtesting engine | Signal→trade conversion, transaction costs & slippage, trade logs, equity & drawdown curves, `POST /backtest/run` | Done |
+| 3 | Risk analytics | Sharpe, Sortino, CAGR, volatility, beta, max drawdown, win rate, benchmark comparison per backtest | Done |
+| 4 | Feature engineering | OHLCV → indicator feature matrices (RSI, MACD, Bollinger, momentum), leakage-free labels and time-series splits | Done |
+| 5 | ML strategies | Directional model training (scikit-learn), time-aware evaluation, model registry with database-backed artifacts, ML signals through the backtester | Done |
+| 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Planned |
+| 7 | NLP research memory | Financial sentiment analysis and embedding-based retrieval over strategy notes and backtest reports (Hugging Face) | Planned |
+| 8 | Production hardening | pytest suite, CI, shared Redis cache, structured logging, dependency modernization, optional Docker Compose | Planned |
+| 9 | Cloud deployment | Single-origin deployment on Vercel — static frontend + FastAPI serverless function, MongoDB Atlas, managed Redis | Planned |
 
-## Development tips
+Planned additional endpoints as phases land (all under `/api`): `POST /research/sentiment`, `POST /research/rag/query`, `POST /copilot/chat`, `POST /copilot/action`.
 
-- Run `npm run check` before committing frontend TypeScript changes to ensure type safety.
-- Run `python -m compileall backend` to catch syntax errors in the FastAPI service.
-- Update this README whenever you add or change developer-facing commands or environment variables.
+## Methodology notes
+
+Strategy and model evaluation in this project follows standard quant-research discipline as the roadmap lands:
+
+- **No lookahead bias** — signals computed at bar *t* execute at bar *t+1*; features never see future data.
+- **Time-series validation** — date-cutoff train/test splits with an embargo gap; never shuffled folds on price data.
+- **Risk-adjusted reporting** — strategies are judged against buy-and-hold with Sharpe/Sortino/drawdown, not raw prediction accuracy.
+- **Cost realism** — backtests apply transaction costs and slippage on every fill.
+
+## Development
+
+- `npm run check` — TypeScript type check (run before committing frontend changes).
+- `npm run build` — production frontend build.
+- `python -m py_compile backend/main.py` — quick backend syntax check.
+- `python backend/test.py` — MongoDB connectivity check.
+- Keep this README in sync when adding scripts, endpoints, or environment variables.
+
+
+### Tests
+
+Install the test dependencies once, then run the suite from the repository root (no database or network needed):
+
+```bash
+pip install -r backend/requirements-dev.txt
+pytest backend/tests
+```

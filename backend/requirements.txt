@@ -6,7 +6,10 @@ pydantic[email]==2.9.0
 python-dotenv==1.0.1
 bcrypt<4.0
 requests==2.32.5
-openai>=1.0.0,<2.0
-
-duckduckgo-search==5.2.2
+openai>=2.0,<4
 yfinance>=0.2.54
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+langchain-core>=0.3
+langchain-openai>=0.2

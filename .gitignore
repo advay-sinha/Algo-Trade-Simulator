@@ -13,4 +13,6 @@ backend/venv
 .DS_Store
 attached_assets
 AGENTS.md
+CLAUDE.md
 .claude/
+Algo_Trade_Lab_Upgrade_Proposal.docx
