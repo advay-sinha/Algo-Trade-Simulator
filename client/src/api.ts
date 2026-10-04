@@ -30,6 +30,7 @@ import type {
   ModelRecord,
   ModelSummary,
   ModelSignal,
+  CopilotEvent,
 } from "./types";
 
 // Same-origin by default: the Vite dev server proxies /api to the backend, and production
@@ -278,4 +279,61 @@ export function fetchModel(token: string, id: string) {
 
 export function predictWithModel(token: string, body: { modelId?: string; symbol?: string }) {
   return request<ModelSignal>("/ml/predict", { method: "POST", body, token });
+}
+
+/**
+ * Stream a copilot reply (Server-Sent Events over a POST). Calls `onEvent` for every event and
+ * resolves when the stream ends. Abort with the signal to stop early.
+ */
+export async function streamCopilot(
+  token: string,
+  body: { message: string; history: Array<{ role: "user" | "assistant"; content: string }> },
+  onEvent: (event: CopilotEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/copilot/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    if ((error as Error).name === "AbortError") throw error;
+    throw new ApiError("Network request failed", 0);
+  }
+  if (!response.ok || !response.body) {
+    if (response.status === 401 && typeof window !== "undefined") window.localStorage.removeItem("algo-trade-session");
+    let detail = response.statusText;
+    try {
+      detail = (await response.json())?.detail ?? detail;
+    } catch {
+      // non-JSON error body
+    }
+    throw new ApiError(typeof detail === "string" ? detail : "Request failed", response.status, response.headers.get("Retry-After"));
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary !== -1) {
+      const chunk = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try {
+            onEvent(JSON.parse(line.slice(6)) as CopilotEvent);
+          } catch {
+            // ignore malformed event
+          }
+        }
+      }
+      boundary = buffer.indexOf("\n\n");
+    }
+  }
 }

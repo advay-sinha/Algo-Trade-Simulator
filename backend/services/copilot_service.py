@@ -1,0 +1,135 @@
+"""Copilot orchestration: builds the model + user-scoped tools, runs the tool-calling loop, and
+turns everything into a stream of UI events. Provider errors are mapped to generic messages."""
+
+from __future__ import annotations
+
+import importlib.util
+import logging
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence
+
+from backend.config import settings
+
+logger = logging.getLogger("algo_trade_backend.copilot")
+
+NOT_CONFIGURED = "The copilot isn't configured on this server yet. An administrator needs to add an OpenAI API key."
+AUTH_FAILED = "The copilot can't sign in to the AI provider right now. An administrator needs to check the OpenAI API key."
+RATE_LIMITED = "The AI provider is rate limiting requests. Wait a moment and try again."
+GENERIC_FAILURE = "The copilot ran into a problem answering that. Try again in a moment."
+
+
+def langchain_available() -> bool:
+    return importlib.util.find_spec("langchain_openai") is not None and importlib.util.find_spec("langchain_core") is not None
+
+
+def configured() -> bool:
+    return bool(settings.openai_api_key) and langchain_available()
+
+
+def _models() -> List[str]:
+    seen: List[str] = []
+    for name in [settings.openai_model, *settings.openai_model_fallbacks]:
+        if name and name not in seen:
+            seen.append(name)
+    return seen
+
+
+def make_llm(model: str) -> Any:
+    from langchain_openai import ChatOpenAI
+
+    kwargs: Dict[str, Any] = {
+        "model": model,
+        "api_key": settings.openai_api_key,
+        "temperature": settings.openai_temperature,
+        "timeout": 30,
+        "max_retries": 1,
+    }
+    if settings.openai_base_url:
+        kwargs["base_url"] = settings.openai_base_url
+    if settings.openai_organization:
+        kwargs["organization"] = settings.openai_organization
+    return ChatOpenAI(**kwargs)
+
+
+class _FallbackModel:
+    """Tries each configured model in order when the provider rate-limits."""
+
+    def __init__(self, factory: Callable[[str], Any], tools: Optional[Sequence[Any]]) -> None:
+        self.factory = factory
+        self.tools = tools
+
+    async def ainvoke(self, messages: Any) -> Any:
+        last: Optional[Exception] = None
+        for model in _models():
+            llm = self.factory(model)
+            if self.tools:
+                llm = llm.bind_tools(list(self.tools))
+            try:
+                return await llm.ainvoke(messages)
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                if type(exc).__name__ in ("RateLimitError",) or getattr(exc, "status_code", None) == 429:
+                    logger.warning("Model %s rate limited; trying next fallback", model)
+                    continue
+                raise
+        assert last is not None
+        raise last
+
+
+def _friendly(exc: Exception) -> str:
+    name = type(exc).__name__
+    status = getattr(exc, "status_code", None)
+    if name == "AuthenticationError" or status == 401:
+        return AUTH_FAILED
+    if name == "RateLimitError" or status == 429:
+        return RATE_LIMITED
+    return GENERIC_FAILURE
+
+
+async def stream_chat(
+    user_id: str,
+    store: Any,
+    message: str,
+    history: Sequence[Dict[str, str]],
+    llm_factory: Optional[Callable[[str], Any]] = None,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Yields events: tool_start, tool_end, message, actions, error, done."""
+    if not configured() and llm_factory is None:
+        yield {"type": "message", "content": NOT_CONFIGURED}
+        yield {"type": "done"}
+        return
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from backend.llm.langchain_agent import history_to_messages, run_agent
+    from backend.llm.prompts import SYSTEM_PROMPT
+    from backend.llm.tools import ToolContext, build_tools
+
+    ctx = ToolContext(user_id=user_id, store=store)
+    tools = build_tools(ctx)
+    factory = llm_factory or make_llm
+    messages = [SystemMessage(content=SYSTEM_PROMPT), *history_to_messages(history), HumanMessage(content=message)]
+    try:
+        async for event in run_agent(_FallbackModel(factory, tools), _FallbackModel(factory, None), messages, tools):
+            yield event
+    except Exception as exc:  # noqa: BLE001 - never leak provider error text to clients
+        logger.warning("Copilot failed: %s", type(exc).__name__)
+        yield {"type": "error", "message": _friendly(exc)}
+    if ctx.actions:
+        yield {"type": "actions", "actions": ctx.actions}
+    yield {"type": "done"}
+
+
+async def collect_chat(user_id: str, store: Any, message: str, history: Sequence[Dict[str, str]], llm_factory: Optional[Callable[[str], Any]] = None) -> Dict[str, Any]:
+    """Non-streaming variant for the legacy /chat alias."""
+    reply_parts: List[str] = []
+    actions: List[Dict[str, Any]] = []
+    tools_used: List[str] = []
+    async for event in stream_chat(user_id, store, message, history, llm_factory):
+        if event["type"] == "message":
+            reply_parts.append(event["content"])
+        elif event["type"] == "error":
+            reply_parts.append(event["message"])
+        elif event["type"] == "actions":
+            actions = event["actions"]
+        elif event["type"] == "tool_end":
+            tools_used.append(event["name"])
+    return {"reply": "\n\n".join(part for part in reply_parts if part) or GENERIC_FAILURE, "citations": [], "actions": actions, "toolsUsed": tools_used}

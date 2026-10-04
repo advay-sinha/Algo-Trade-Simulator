@@ -8,7 +8,7 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Dict, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from backend.config import (
     IS_PRODUCTION,
@@ -40,6 +40,12 @@ from backend.models.ml import FeaturesRequest, PredictRequest, TrainModelRequest
 from backend.services import experiment_tracking
 from backend.services.model_registry_service import tracking_payload, train_and_evaluate
 from backend.services.feature_service import preview_dataset
+from backend.models.copilot import CopilotActionRequest, CopilotChatRequest
+from backend.services import copilot_service
+import json
+from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
+from backend.services.research_actions import ActionError, model_signal_for_user, public_model, run_backtest_for_user, train_model_for_user
 import pandas as pd
 from backend.services import market_data_service as market
 from backend.services.market_data_service import MARKET_HEALTH, build_offline_chart
@@ -58,13 +64,6 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     DuplicateKeyError = None
     ObjectId = None
     InvalidId = None
-
-try:
-    from openai import AsyncOpenAI
-    from openai import APIStatusError, RateLimitError
-except ModuleNotFoundError:  # pragma: no cover - optional dependency
-    AsyncOpenAI = None
-    APIStatusError = RateLimitError = None
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Path, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -135,27 +134,6 @@ def stringify_object_id(value: Any) -> Any:
 
 
 logger = logging.getLogger("algo_trade_backend")
-
-if settings.openai_api_key and AsyncOpenAI is not None:
-    openai_client_kwargs: Dict[str, Any] = {"api_key": settings.openai_api_key}
-    if settings.openai_base_url:
-        openai_client_kwargs["base_url"] = settings.openai_base_url
-    if settings.openai_organization:
-        openai_client_kwargs["organization"] = settings.openai_organization
-    try:
-        openai_client = AsyncOpenAI(**openai_client_kwargs)
-    except Exception as exc:  # pragma: no cover - defensive initialisation
-        logger.warning("Failed to initialise OpenAI client: %s", exc)
-        openai_client = None
-else:
-    openai_client = None
-
-CHAT_SYSTEM_PROMPT = (
-    "You are AlgoTrade Copilot, an equities and strategy assistant for active traders. "
-    "Offer concise, actionable guidance grounded in publicly available information. "
-    "Highlight specific tickers, indicators, and risk considerations when relevant. "
-    "If you include external references, add a 'Sources:' section at the end with one plain URL per line."
-)
 
 app = FastAPI(
     title="Algo Trade Simulator API",
@@ -234,12 +212,12 @@ class PredictionPayload(BaseModel):
 
 
 class ChatHistoryItem(BaseModel):
-    role: str
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=8000)
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1)
+    message: str = Field(min_length=1, max_length=2000)
     history: List[ChatHistoryItem] = Field(default_factory=list)
 
 
@@ -270,10 +248,6 @@ def model_summary(record: Dict[str, Any]) -> Dict[str, Any]:
         "strategySharpe": strategy_metrics.get("sharpe"),
         "tracking": record.get("tracking"),
     }
-
-
-def public_model(record: Dict[str, Any]) -> Dict[str, Any]:
-    return {key: value for key, value in record.items() if not key.startswith("_") and key != "artifactId"}
 
 
 def backtest_summary(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -861,105 +835,6 @@ async def get_current_user(
     return user | {"token": token}
 
 
-INVESTMENT_PROMPT_RE = re.compile(r"which stock should i invest in", re.IGNORECASE)
-
-
-def parse_budget_and_horizon(message: str) -> tuple[float, int]:
-    numbers = [float(num.replace(",", "")) for num in re.findall(r"\d+(?:,\d+)*(?:\.\d+)?", message)]
-    if not numbers:
-        return 5000.0, 5
-    budget = max(numbers)
-    horizon = max(int(min(numbers)), 1)
-    return budget, horizon
-
-
-def build_investment_reply(message: str) -> Dict[str, Any]:
-    budget, horizon_days = parse_budget_and_horizon(message)
-    suggestions = [
-        {
-            "symbol": "AAPL",
-            "label": "US mega-cap tech with deep liquidity",
-            "angle": "Captures any short-term momentum in US indices while staying highly liquid.",
-        },
-        {
-            "symbol": "XLE",
-            "label": "Energy sector ETF",
-            "angle": "Provides cyclical exposure that often decorrelates from tech over short horizons.",
-        },
-        {
-            "symbol": "RELIANCE.NS",
-            "label": "Reliance Industries (India)",
-            "angle": "Diversifies into Indian energy/retail with strong domestic flows.",
-        },
-    ]
-    quotes = market.fetch_quotes([item["symbol"] for item in suggestions])
-    quote_map = {quote["symbol"]: quote for quote in quotes}
-    per_slice = budget / len(suggestions)
-    lines = [
-        f"For a ~{horizon_days}-day window with about {budget:,.0f} budget, stay nimble and split across liquid leaders:",
-        "",
-    ]
-    citations: List[str] = []
-    for item in suggestions:
-        quote = quote_map.get(item["symbol"]) or {}
-        price = quote.get("price")
-        currency = quote.get("currency") or ""
-        if price:
-            units = max(per_slice / price, 0)
-            allocation = f"~{units:.1f} shares at {price:.2f} {currency}" if currency else f"~{units:.1f} shares at {price:.2f}"
-        else:
-            allocation = "price unavailable"
-        change = quote.get("changePercent")
-        change_str = f" ({change:+.2f}%)" if isinstance(change, (int, float)) else ""
-        lines.append(
-            f"- {item['symbol']}: {item['label']} — {allocation}{change_str}. {item['angle']}"
-        )
-        citations.append(f"https://finance.yahoo.com/quote/{item['symbol']}")
-    lines.append("")
-    lines.append(
-        "Keep stops tight for a 5-day thesis, and review earnings/news catalysts each session. This is educational insight, not investment advice."
-    )
-    reply = "\n".join(lines)
-    return {"reply": reply, "citations": citations}
-
-
-def normalise_chat_history(history: List[ChatHistoryItem]) -> List[Dict[str, str]]:
-    converted: List[Dict[str, str]] = []
-    for item in history[-10:]:
-        role = "assistant" if item.role.lower() == "assistant" else "user"
-        converted.append({"role": role, "content": item.content})
-    return converted
-
-
-def split_reply_and_citations(message: str) -> tuple[str, List[str]]:
-    lines = [line.rstrip() for line in message.splitlines()]
-    reply_lines: List[str] = []
-    citations: List[str] = []
-    collecting_sources = False
-    for line in lines:
-        if collecting_sources:
-            cleaned = line.strip().lstrip("-•").strip()
-            if cleaned:
-                citations.append(cleaned)
-            continue
-        if line.strip().lower() == "sources:":
-            collecting_sources = True
-            continue
-        reply_lines.append(line)
-    reply = "\n".join(reply_lines).strip()
-    return reply, citations
-
-
-def assemble_chat_models() -> List[str]:
-    candidates: List[str] = []
-    seen: set[str] = set()
-    for value in [settings.openai_model, *settings.openai_model_fallbacks]:
-        if value and value not in seen:
-            candidates.append(value)
-            seen.add(value)
-    return candidates
-
-
 signup_rate_limit = rate_limit("auth-signup", settings.auth_rate_limit_per_minute)
 login_rate_limit = rate_limit("auth-login", settings.auth_rate_limit_per_minute)
 dev_auth_rate_limit = rate_limit("auth-dev", settings.auth_rate_limit_per_minute)
@@ -1329,75 +1204,48 @@ async def predict(payload: PredictionPayload, user: Dict[str, Any] = Depends(get
     }
 
 
-@router.post("/chat")
-async def chat(payload: ChatRequest, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-    _ = user
-    if INVESTMENT_PROMPT_RE.search(payload.message):
-        prepared = await asyncio.to_thread(build_investment_reply, payload.message)
-        return {"reply": prepared["reply"], "citations": prepared["citations"], "actions": []}
-    if payload.message.lower().startswith("create a simulation"):
-        reply = "Jump to the Simulations page and use the create form on the left. I will automate this workflow in a future release."
-        return {"reply": reply, "citations": [], "actions": []}
-    if openai_client is None:
-        reply = (
-            "The assistant is not ready because the backend is missing a valid OpenAI configuration. "
-            "Ask an administrator to set OPENAI_API_KEY."
-        )
-        return {"reply": reply, "citations": [], "actions": []}
-    messages: List[Dict[str, str]] = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
-    messages.extend(normalise_chat_history(payload.history))
-    messages.append({"role": "user", "content": payload.message})
-    chat_models = assemble_chat_models()
-    response = None
-    last_error: Optional[Exception] = None
-    for model_name in chat_models:
-        try:
-            response = await openai_client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=settings.openai_temperature,
-            )
-            break
-        except Exception as exc:
-            last_error = exc
-            if RateLimitError is not None and isinstance(exc, RateLimitError):
-                logger.warning("OpenAI rate limit for model %s: %s", model_name, exc)
-                continue
-            if APIStatusError is not None and isinstance(exc, APIStatusError) and getattr(exc, "status_code", None) == 429:
-                logger.warning("OpenAI API status 429 for model %s: %s", model_name, exc)
-                continue
-            logger.exception("OpenAI chat completion failed for model %s: %s", model_name, exc)
-            break
-    if response is None:
-        # Provider error text can contain account/infra details; it stays in server logs only.
-        logger.error("All chat models failed; last error type: %s", type(last_error).__name__ if last_error else "none")
-        reply = (
-            "I can't reach the assistant right now. Please try again in a little while."
-        )
-        return {"reply": reply, "citations": [], "actions": []}
-    choice = response.choices[0] if response.choices else None
-    content = choice.message.content.strip() if choice and choice.message and choice.message.content else ""
-    if not content:
-        reply = (
-            "The assistant did not return any content. Try rephrasing or asking again shortly."
-        )
-        return {"reply": reply, "citations": [], "actions": []}
-    reply, citations = split_reply_and_citations(content)
-    return {"reply": reply or content, "citations": citations, "actions": []}
+copilot_rate_limit = rate_limit("copilot", 15)
+
+
+@router.post("/chat", dependencies=[Depends(copilot_rate_limit)])
+async def chat(payload: ChatRequest, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Dict[str, Any]:
+    """Legacy non-streaming alias for the copilot (kept for older clients)."""
+    history = [{"role": item.role, "content": item.content} for item in payload.history]
+    return await copilot_service.collect_chat(user["id"], store, payload.message, history)
+
+
+@router.post("/copilot/chat", dependencies=[Depends(copilot_rate_limit)])
+async def copilot_chat(payload: CopilotChatRequest, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> StreamingResponse:
+    """Server-Sent Events: tool activity as it happens, then the reply, saved actions, and done."""
+    history = [turn.model_dump() for turn in payload.history]
+
+    async def events():
+        async for event in copilot_service.stream_chat(user["id"], store, payload.message, history):
+            yield f"data: {json.dumps(sanitize(event), default=str)}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/copilot/action", dependencies=[Depends(copilot_rate_limit)])
+async def copilot_action(payload: CopilotActionRequest, user: Dict[str, Any] = Depends(get_current_user), store: Store = Depends(get_store)) -> Dict[str, Any]:
+    """Run one structured action with the same validation and code path as the REST endpoints."""
+    try:
+        if payload.action == "run_backtest":
+            record = await run_backtest_for_user(BacktestRequest(**payload.params), user["id"], store)
+            return {"action": payload.action, "id": record["id"], "path": f"/backtests/{record['id']}", "summary": record["summary"]}
+        if payload.action == "train_model":
+            record = await train_model_for_user(TrainModelRequest(**payload.params), user["id"], store)
+            return {"action": payload.action, "id": record["id"], "path": f"/lab/models/{record['id']}", "classification": record["classification"]}
+        simulation = await store.add_simulation(user["id"], SimulationInput(**payload.params))
+        return {"action": payload.action, "id": simulation["id"], "path": "/simulations", "simulation": simulation}
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        raise HTTPException(status_code=422, detail=f"Invalid {'.'.join(str(p) for p in first.get('loc', ()))}: {first.get('msg')}") from exc
+    except ActionError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 backtest_rate_limit = rate_limit("backtest", 20)
-
-
-async def _benchmark_history(symbol: str, range_value: str, skip: bool) -> Optional[Dict[str, Any]]:
-    """Benchmark bars for the risk report; failures degrade to 'unavailable', never fail the run."""
-    if skip:
-        return None
-    try:
-        return await market.get_daily_history(symbol, range_value)
-    except HTTPException:
-        logger.warning("Benchmark history unavailable for %s", symbol)
-        return None
 
 
 @router.post("/backtest/run", dependencies=[Depends(backtest_rate_limit)])
@@ -1407,69 +1255,9 @@ async def run_backtest_endpoint(
     store: Store = Depends(get_store),
 ) -> Dict[str, Any]:
     try:
-        strategy = get_strategy(payload.strategy)
-    except KeyError as exc:
-        raise HTTPException(status_code=422, detail="Unknown strategy") from exc
-    try:
-        params = strategy.parse_params(payload.params)
-    except ValueError as exc:
-        # Pydantic messages describe the parameter rule (no internals), so they're safe to return.
-        first = exc.errors()[0] if hasattr(exc, "errors") else None
-        field = ".".join(str(part) for part in first.get("loc", ())) if first else ""
-        message = str(first.get("msg", "")).removeprefix("Value error, ") if first else ""
-        detail = f"Invalid parameter{f' {field}' if field else ''}: {message}" if first else "Invalid strategy parameters"
-        raise HTTPException(status_code=422, detail=detail) from exc
-
-    benchmark_symbol = (payload.benchmark or default_benchmark(payload.symbol)).upper()
-    same_as_symbol = benchmark_symbol == payload.symbol.upper()
-    chart, benchmark_chart = await asyncio.gather(
-        market.get_daily_history(payload.symbol, payload.range),
-        _benchmark_history(benchmark_symbol, payload.range, skip=same_as_symbol),
-    )
-    if same_as_symbol:
-        benchmark_chart = chart
-    bars = bars_from_points(chart.get("points", []))
-    needed = strategy.min_history(params) + 2
-    if len(bars) < needed:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Not enough history: {len(bars)} daily bars, this configuration needs at least {needed}. Choose a longer range.",
-        )
-    signals = strategy.generate_signals(bars, params)
-    result = run_backtest(
-        bars,
-        signals,
-        BacktestConfig(starting_capital=payload.startingCapital, cost_bps=payload.costBps, slippage_bps=payload.slippageBps),
-    )
-    series = result.pop("_series")
-    benchmark_bars = bars_from_points(benchmark_chart.get("points", [])) if benchmark_chart else None
-    risk = build_risk_report(
-        equity=series["equity"],
-        buy_hold_equity=series["buyHold"],
-        trades=result["trades"],
-        benchmark_symbol=benchmark_symbol,
-        benchmark_close=benchmark_bars["close"] if benchmark_bars is not None and not benchmark_bars.empty else None,
-        benchmark_source=benchmark_chart.get("source") if benchmark_chart else None,
-        risk_free_annual=payload.riskFreeRate,
-    )
-    benchmark_equity = risk.pop("benchmarkEquity")
-    record = result | {
-        "risk": risk,
-        "benchmarkEquity": downsample(benchmark_equity),
-        "symbol": payload.symbol.upper(),
-        "strategy": {"id": strategy.id, "name": strategy.name, "params": params.model_dump()},
-        "range": payload.range,
-        "config": {
-            "startingCapital": payload.startingCapital,
-            "costBps": payload.costBps,
-            "slippageBps": payload.slippageBps,
-            "benchmark": benchmark_symbol,
-            "riskFreeRate": payload.riskFreeRate,
-        },
-        "dataSource": chart.get("source", "live"),
-        "currency": chart.get("currency"),
-    }
-    return await store.add_backtest(user["id"], record)
+        return await run_backtest_for_user(payload, user["id"], store)
+    except ActionError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 @router.get("/backtests")
@@ -1547,19 +1335,10 @@ async def train_ml_model(
     store: Store = Depends(get_store),
 ) -> Dict[str, Any]:
     """Train on the earlier window, evaluate on the later unseen window, register the model."""
-    chart = await market.get_daily_history(payload.symbol, payload.range)
     try:
-        record, artifact = await asyncio.to_thread(train_and_evaluate, payload, chart)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if experiment_tracking.enabled():
-        run_name, params, metrics, tags = tracking_payload(record)
-        tracked = await asyncio.to_thread(experiment_tracking.log_training_run, run_name, params, metrics, tags)
-        record["tracking"] = {"enabled": True, "logged": tracked is not None} | (tracked or {})
-    else:
-        record["tracking"] = {"enabled": False}
-    stored = await store.add_model(user["id"], record, artifact)
-    return public_model(stored)
+        return await train_model_for_user(payload, user["id"], store)
+    except ActionError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 @router.get("/ml/models")
@@ -1580,18 +1359,10 @@ async def get_ml_model(
 
 
 async def _model_signal(store: Store, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
-    artifact = await store.get_artifact(record)
-    if artifact is None:
-        raise HTTPException(status_code=404, detail="Model artifact not found")
-    chart = await market.get_daily_history(record["symbol"], "1y")
-    bars = bars_from_points(chart.get("points", []))
-    from backend.ml.inference import predict_latest  # lazy: keeps scikit-learn off the cold-start path
-
     try:
-        result = await asyncio.to_thread(predict_latest, record, artifact, bars)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return result | {"dataSource": chart.get("source", "live")}
+        return await model_signal_for_user(store, record)
+    except ActionError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 @router.post("/ml/predict")
@@ -1624,7 +1395,7 @@ async def system_status(
         "store": "mongo" if isinstance(store, MongoStore) else "memory",
         "strictDb": settings.strict_db,
         "devEndpoints": dev_endpoints_enabled(),
-        "copilotConfigured": openai_client is not None,
+        "copilotConfigured": copilot_service.configured(),
         "experimentTracking": experiment_tracking.enabled(),
         "offlineMarketDataAllowed": settings.allow_offline_market_data,
         "marketData": dict(MARKET_HEALTH),

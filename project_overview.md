@@ -44,7 +44,7 @@ A full-stack quantitative research and trading simulation platform. Users resear
 | Backtesting | `services/backtesting_service.py` — next-bar-open fills, whole-share sizing, commission + slippage in bps on every fill, equity / drawdown / buy-and-hold series, trade log with open position marked to market, deterministic |
 | Lab trainer | `/analytics/train` runs a zero-cost SMA crossover backtest over 6 months (in-sample) and reports real return, CAGR, drawdown, Sharpe, win rate; naive 5-day-momentum live signal; training-run listing |
 | Market provenance | Every quote, chart, search result, and sparkline carries `source` (`live` / `offline` / `synthetic`); fallbacks are gated by `ALLOW_OFFLINE_MARKET_DATA`; `/api/status` reports the last observed source per server instance |
-| Chat | Regex-intercepted canned replies for investment prompts, then OpenAI Chat Completions with a model-fallback list and citation splitting |
+| Copilot | `llm/tools.py` (10 LangChain `StructuredTool`s built per request with the user's id/store in a closure), `llm/langchain_agent.py` (tool-calling loop, 5-call budget, every call answered), `llm/prompts.py`, `services/copilot_service.py` (model fallbacks on rate limits, SSE event stream, provider-error masking); shared action code in `services/research_actions.py` so REST and tools use one path |
 | Simulations | Per-user CRUD (create / list / patch status+notes / delete) |
 
 The backend is scheduled to split into `services/`, `strategies/`, `ml/`, `llm/`, and `analytics/` packages as the roadmap lands (see §6).
@@ -113,12 +113,14 @@ All routes are prefixed with `/api`.
 | `POST /ml/train`, `GET /ml/models`, `GET /ml/models/{id}`, `POST /ml/predict` | Train + register, list, inspect, live signal | ✓ |
 | `GET /analytics/strategies` | Strategy catalog | — |
 | `POST /analytics/train`, `POST /analytics/predict` | SMA training, momentum signal | ✓ |
-| `POST /chat` | Research copilot | ✓ |
+| `POST /copilot/chat` | Copilot conversation streamed as Server-Sent Events | ✓ |
+| `POST /copilot/action` | Structured action execution (backtest / train / simulation) | ✓ |
+| `POST /chat` | Non-streaming copilot alias | ✓ |
 | `GET /health` | Liveness | — |
 
 ### Planned (per roadmap)
 
-`POST /research/sentiment`, `POST /research/notes`, `POST /research/rag/query`, `POST /copilot/chat`, `POST /copilot/action`.
+`POST /research/sentiment`, `POST /research/notes`, `POST /research/rag/query`.
 
 ## 6. Roadmap
 
@@ -130,7 +132,7 @@ All routes are prefixed with `/api`.
 | 3 | Risk analytics — Sharpe, Sortino, CAGR, volatility, beta, max drawdown, win rate, benchmark comparison | Done |
 | 4 | Feature engineering — OHLCV → indicator matrices, leakage-free labels, time-series splits | Done |
 | 5 | ML strategies — directional models, time-aware evaluation, model registry (artifacts in GridFS), ML signals through the backtester | Done |
-| 6 | Copilot 2.0 — tool-calling assistant that runs backtests, trains models, explains results | Planned |
+| 6 | Copilot 2.0 — tool-calling assistant that runs backtests, trains models, explains results | Done |
 | 7 | NLP research memory — financial sentiment, embeddings stored in MongoDB with vector retrieval over notes/reports | Planned |
 | 8 | Production hardening — pytest suite, CI, shared Redis cache, structured logging, dependency modernization, optional Docker | Planned |
 | 9 | Cloud deployment — Vercel (static frontend + FastAPI serverless function, same origin), MongoDB Atlas, managed Redis | Planned |

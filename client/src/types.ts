@@ -482,3 +482,20 @@ export interface ModelSignal {
   rule?: string | null;
   dataSource: DataSource;
 }
+
+/* Copilot ------------------------------------------------------------------------------------ */
+
+export interface CopilotAction {
+  type: "backtest" | "model" | "simulation";
+  id: string;
+  label: string;
+  path: string;
+}
+
+export type CopilotEvent =
+  | { type: "tool_start"; id: string; name: string; args: string; stateChanging: boolean }
+  | { type: "tool_end"; id: string; name: string; ok: boolean; error: string | null; result: Record<string, unknown> | null }
+  | { type: "message"; content: string; budgetReached?: boolean }
+  | { type: "actions"; actions: CopilotAction[] }
+  | { type: "error"; message: string }
+  | { type: "done" };

@@ -122,7 +122,8 @@ export function SafetyPage() {
           </p>
           <TermList terms={["lookahead", "trainTestSplit", "embargo", "buyAndHold", "baselineAccuracy", "transactionCost"]} />
           <Notice>
-            Today's Lab results are indicative and in-sample, and the live signal is naive momentum. Both are labeled wherever they appear.
+            The Lab's quick trainer is in-sample; Backtests and the Model lab measure on costs and unseen data. Copilot actions run as you, are capped at 5 tool
+            calls per message, use the same validation as the forms, never fetch URLs, and every saved action is listed under the reply.
           </Notice>
         </Tabs.Content>
 
@@ -160,7 +161,7 @@ export function SafetyPage() {
               { title: "Yahoo Finance rate limits", body: "The provider throttles aggressively, especially from cloud servers. Expect occasional fallback data.", ok: false },
               { title: "Legacy trainer metrics", body: "Win rate and Sharpe from the legacy trainer are placeholders and are hidden until the risk engine lands.", ok: false },
               { title: "No out-of-sample testing yet", body: "Time-ordered train/test splits arrive with the feature pipeline.", ok: false },
-              { title: "Copilot can't act yet", body: "It answers questions; running backtests and creating simulations arrives with tool-calling.", ok: false },
+              { title: "Copilot answers depend on an external model", body: "It cites tool results, but wording comes from a language model — check the linked reports before relying on a summary.", ok: false },
             ]}
           />
         </Tabs.Content>

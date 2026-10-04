@@ -293,7 +293,7 @@ function CopilotWorkbench() {
     <div className="stack">
       {status?.copilotConfigured === false ? (
         <Notice tone="warn" icon="alert">
-          This server has no OpenAI key configured, so the copilot can only give built-in replies.
+          This server has no working OpenAI key configured, so the copilot can't answer yet.
         </Notice>
       ) : null}
       <div>
@@ -302,7 +302,23 @@ function CopilotWorkbench() {
           Open copilot
         </button>
       </div>
-      <PlannedState phase={6} what="Tool-calling" items={findEngine("copilot")?.planned} />
+      <div className="table-frame">
+        <ul className="list-plain">
+          {[
+            ["Market data", "get_quote, get_price_history"],
+            ["Strategies & backtests", "list_strategies, run_backtest, get_backtest_report, list_backtests"],
+            ["Models", "train_model, get_model_signal"],
+            ["Simulations", "portfolio_overview, create_simulation"],
+          ].map(([group, tools]) => (
+            <li className="list-row" key={group}>
+              <div className="list-row-main">
+                <span className="list-row-title">{group}</span>
+                <span className="text-meta mono">{tools}</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

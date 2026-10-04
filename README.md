@@ -16,7 +16,7 @@ The project is evolving from a trading simulator into a modular quant research p
 - **Simulations** — create, track, update, and delete simulated portfolio runs per user.
 - **Accounts & sessions** — email/password signup and login, bcrypt-hashed passwords, bearer-token sessions with 7-day expiry, server-side logout, session tokens stored only as SHA-256 hashes, and per-client rate limiting on authentication.
 - **Analytics dashboard** — simulation totals, trained strategies, recent simulations, and one-month watchlist trends.
-- **Research copilot** — chat assistant for market research questions (requires an OpenAI API key; degrades gracefully without one).
+- **Research copilot (tool-calling)** — a LangChain agent on OpenAI chat models that runs real platform tools on your behalf: quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, and simulation creation. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw.
 - **Flexible persistence** — MongoDB (Atlas or local) for durable storage, or a zero-setup in-memory mode for local development; a strict mode refuses to run without the database instead of silently losing data.
 - **Input hardening** — ticker symbols, chart ranges, and simulation states are validated before any outbound request; error responses never expose internal details.
 
@@ -28,7 +28,7 @@ The project is evolving from a trading simulator into a modular quant research p
 | Backend | FastAPI, Pydantic, Motor (async MongoDB), Passlib |
 | Database | MongoDB — optional in-memory fallback for development |
 | Market data | Yahoo Finance via `yfinance` with raw-API and offline fallbacks |
-| Copilot | OpenAI Chat Completions with configurable model fallbacks |
+| Copilot | LangChain (langchain-core, langchain-openai) tool-calling over OpenAI chat models, streamed via Server-Sent Events |
 
 ## Project structure
 
@@ -43,6 +43,7 @@ Algo-Trade-Simulator/
 │   ├── strategies/          # Strategy interface + registry: buy-and-hold, SMA crossover, momentum, mean reversion
 │   ├── analytics/           # Risk metrics (metrics.py) and risk report assembly (risk.py)
 │   ├── ml/                  # Features, datasets, training, evaluation, inference
+│   ├── llm/                 # Copilot tools, prompts, tool-calling loop
 │   ├── tests/               # pytest suite (features, backtesting, metrics, ML, experiment tracking)
 │   ├── requirements-dev.txt # Test-only dependencies
 │   ├── requirements.txt     # Python dependencies
@@ -206,7 +207,9 @@ All routes are served under the `/api` prefix. Authenticated routes expect `Auth
 | `GET /api/ml/models` / `GET /api/ml/models/{id}` | Model registry list / full report | ✓ |
 | `POST /api/ml/predict` | Live signal from a registered model (by id, or latest for a symbol) | ✓ |
 | `GET /api/status` | Operational snapshot: store type, market-data source health, copilot configured, rate limits (no secrets) | ✓ |
-| `POST /api/chat` | Research copilot | ✓ |
+| `POST /api/copilot/chat` | Copilot conversation, streamed as Server-Sent Events (tool start/end, reply, saved actions) | ✓ |
+| `POST /api/copilot/action` | Run one structured action (`run_backtest`, `train_model`, `create_simulation`) without free-text parsing | ✓ |
+| `POST /api/chat` | Non-streaming copilot reply (compatibility alias) | ✓ |
 | `GET /api/health` | Liveness check | — |
 
 ## Roadmap
@@ -221,12 +224,12 @@ Development proceeds in phases; each phase ships working, verifiable functionali
 | 3 | Risk analytics | Sharpe, Sortino, CAGR, volatility, beta, max drawdown, win rate, benchmark comparison per backtest | Done |
 | 4 | Feature engineering | OHLCV → indicator feature matrices (RSI, MACD, Bollinger, momentum), leakage-free labels and time-series splits | Done |
 | 5 | ML strategies | Directional model training (scikit-learn), time-aware evaluation, model registry with database-backed artifacts, ML signals through the backtester | Done |
-| 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Planned |
+| 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Done |
 | 7 | NLP research memory | Financial sentiment analysis and embedding-based retrieval over strategy notes and backtest reports (Hugging Face) | Planned |
 | 8 | Production hardening | pytest suite, CI, shared Redis cache, structured logging, dependency modernization, optional Docker Compose | Planned |
 | 9 | Cloud deployment | Single-origin deployment on Vercel — static frontend + FastAPI serverless function, MongoDB Atlas, managed Redis | Planned |
 
-Planned additional endpoints as phases land (all under `/api`): `POST /research/sentiment`, `POST /research/rag/query`, `POST /copilot/chat`, `POST /copilot/action`.
+Planned additional endpoints as phases land (all under `/api`): `POST /research/sentiment`, `POST /research/notes`, `POST /research/rag/query`.
 
 ## Methodology notes
 
