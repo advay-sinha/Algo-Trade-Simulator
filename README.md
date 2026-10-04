@@ -69,9 +69,9 @@ Algo-Trade-Simulator/
 │       ├── styles/          # Design tokens (light/dark) and component styles
 │       ├── pages/           # One module per route
 │       └── components/      # ui/ primitives, charts/, layout/ shell, copilot/ drawer
-├── deploy/nginx.conf        # Frontend container: static files + /api proxy
+├── deploy/                  # nginx config (frontend container), Hugging Face Space card
 ├── scripts/                 # Connection checks (HF, MongoDB), deployed bundle size check, local HF inference stand-in
-├── .github/workflows/       # CI
+├── .github/workflows/       # CI, API deploy to the Hugging Face Space
 ├── Dockerfile               # Backend image
 ├── Dockerfile.client        # Frontend image
 ├── docker-compose.yml       # Local stack: frontend + backend + MongoDB
@@ -296,7 +296,7 @@ Development proceeds in phases; each phase ships working, verifiable functionali
 | 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Done |
 | 7 | NLP research memory | FinBERT sentiment, embedding-based retrieval over notes and backtest/model summaries, copilot answers that cite your notes (hosted Hugging Face inference) | Done |
 | 8 | Production hardening | Route modules, API + unit test suite, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
-| 9 | Cloud deployment | Frontend on Vercel, API container on Koyeb behind a same-origin `/api` rewrite, MongoDB Atlas, deployment smoke test | Ready to deploy |
+| 9 | Cloud deployment | Frontend on Vercel, API container in a Hugging Face Space (auto-deployed after CI) behind a same-origin `/api` rewrite, MongoDB Atlas, deployment smoke test | Ready to deploy |
 
 
 ## Methodology notes
@@ -311,44 +311,44 @@ Strategy and model evaluation in this project follows standard quant-research di
 ## Deployment
 
 ```
-Browser ──► Vercel (static frontend, dist/) ──/api/* rewrite──► Koyeb (Docker: FastAPI + uvicorn)
+Browser ──► Vercel (static frontend, dist/) ──/api/* rewrite──► Hugging Face Space (Docker: FastAPI + uvicorn)
                                                                  ├── MongoDB Atlas (data, model artifacts, note embeddings)
                                                                  ├── Hugging Face inference (sentiment, embeddings)
                                                                  ├── Groq or another LLM provider (copilot)
                                                                  └── DagsHub MLflow (optional experiment tracking)
 ```
 
-The browser only ever talks to the Vercel domain: Vercel serves the frontend and forwards `/api/*` to the API on Koyeb, so there is one origin, no CORS configuration, and no API URL baked into the frontend build.
+The browser only ever talks to the Vercel domain: Vercel serves the frontend and forwards `/api/*` to the API container, so there is one origin, no CORS configuration, and no API URL baked into the frontend build. The API runs in a free Hugging Face Docker Space (2 vCPU, 16 GB RAM), built from the repository's `Dockerfile`.
 
 ### 1. MongoDB Atlas
 
-- Network Access → add `0.0.0.0/0` (free container instances have no fixed outbound IP), and rely on a strong password.
+- Network Access → add `0.0.0.0/0` (free container hosts have no fixed outbound IP), and rely on a strong password.
 - Database Access → a dedicated user with `readWrite` on one database only.
 - Check the connection string locally: `python scripts/check_connections.py --mongo`.
 
-### 2. API on Koyeb
+### 2. API on a Hugging Face Space
 
-1. Koyeb → Create Web Service → GitHub → this repository, branch `main`.
-2. Builder: **Dockerfile** (repository root). Instance: Free. Pick the region closest to your Atlas cluster.
-3. Ports: `8000`, protocol HTTP, public route `/`. Health check: HTTP, path `/api/health`.
-4. Environment variables (store the keys as Koyeb Secrets):
+1. huggingface.co → New Space → name it (e.g. `algo-trade-api`), SDK **Docker** (blank template), hardware **CPU basic (free)**, visibility **Public** (the frontend must be able to reach it).
+2. Space → Settings → **Variables and secrets** → add as *secrets*:
 
-   | Variable | Value |
+   | Secret | Value |
    |---|---|
    | `MONGO_URL` | Atlas connection string |
    | `MONGODB_DB` | database name, e.g. `algo-trade-simulator` |
    | `GROQ_API_KEY` | copilot (or another provider from the copilot table) |
-   | `HF_TOKEN` | research memory and sentiment |
+   | `HF_TOKEN` | research memory and sentiment (a read token) |
    | `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD` | optional, DagsHub tracking |
-   | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | optional; only needed with more than one instance |
 
-   The image already sets `APP_ENV=production`, which turns on strict database mode (no silent in-memory fallback), JSON logs, proxy-aware client IPs for rate limiting, and keeps the development sign-in route disabled. Never set `ENABLE_DEV_ENDPOINTS` or `USE_IN_MEMORY_DB` here.
-5. Deploy, then open `https://<service>.koyeb.app/api/health`.
+   The image already sets `APP_ENV=production`, which turns on strict database mode (no silent in-memory fallback), JSON logs, proxy-aware client IPs for rate limiting, and keeps the development sign-in route disabled. Never set `ENABLE_DEV_ENDPOINTS` or `USE_IN_MEMORY_DB`.
+3. Create a Hugging Face access token with **write** access to that Space (fine-grained: repository write on the Space).
+4. GitHub → repository Settings → Secrets and variables → Actions: add the secret `HF_SPACE_TOKEN` (the write token) and the variable `HF_SPACE_ID` (`<hf-username>/<space-name>`).
+5. Every push to `main` that passes CI now runs **Deploy API to Hugging Face Space** (`.github/workflows/deploy-space.yml`), which pushes the `Dockerfile`, `backend/` and the Space card (`deploy/huggingface/README.md`) to the Space; the Space rebuilds the image. Run the workflow manually from the Actions tab for the first deploy.
+6. When the Space shows *Running*, open `https://<hf-username>-<space-name>.hf.space/api/health`.
 
 ### 3. Frontend on Vercel
 
-1. Point the `/api` rewrite in `vercel.json` at the Koyeb URL (first entry in `rewrites`):
-   `{ "source": "/api/:path*", "destination": "https://<service>.koyeb.app/api/:path*" }`
+1. Point the `/api` rewrite in `vercel.json` at the Space (first entry in `rewrites`):
+   `{ "source": "/api/:path*", "destination": "https://<hf-username>-<space-name>.hf.space/api/:path*" }`
 2. Vercel → Add New Project → import this repository. `vercel.json` sets the Vite build (`npm run build` → `dist/`), the SPA fallback for deep links, and security headers. No environment variables are needed.
 
 ### 4. Verify
@@ -357,15 +357,15 @@ The browser only ever talks to the Vercel domain: Vercel serves the frontend and
 python scripts/smoke_deploy.py https://<project>.vercel.app
 ```
 
-It wakes the instance, signs up a throwaway account, and exercises auth, simulations, market data (reporting whether quotes are live), a backtest and its risk report, research memory and the copilot when configured, and logout. It cleans up the simulation and note it creates.
+It wakes the API, signs up a throwaway account, and exercises auth, simulations, market data (reporting whether quotes are live), a backtest and its risk report, research memory and the copilot when configured, and logout. It cleans up the simulation and note it creates.
 
 ### Operating notes
 
-- **Cold starts**: the free Koyeb instance sleeps when idle; the first request after a pause waits for it to start.
-- **CPU**: the free instance has a fraction of one CPU. Model training (a few CPU-seconds locally) and the copilot's first message after a start can take up to about a minute.
+- **Sleep**: free Spaces pause after about two days without traffic; the next request restarts the container (a minute or two).
 - **Market data**: Yahoo Finance may rate-limit cloud IP ranges. Quotes then fall back to clearly flagged offline values, and the interface badges them.
-- **Rollback**: redeploy a previous deployment from the Koyeb service page; Vercel offers instant rollback to any earlier frontend deployment.
-- **Alternative wiring**: to call the API directly instead of through the rewrite, set `VITE_API_BASE_URL=https://<service>.koyeb.app/api` in Vercel, `CORS_ORIGINS=https://<project>.vercel.app` on Koyeb, and add the Koyeb origin to `connect-src` in the `vercel.json` Content-Security-Policy.
+- **Rollback**: re-run the deploy workflow for an earlier commit (Actions → the CI run of that commit), or revert the commit on `main`; Vercel offers instant rollback to any earlier frontend deployment.
+- **Alternative wiring**: to call the API directly instead of through the rewrite, set `VITE_API_BASE_URL=https://<space-host>/api` in Vercel, `CORS_ORIGINS=https://<project>.vercel.app` on the Space, and add the Space origin to `connect-src` in the `vercel.json` Content-Security-Policy.
+- The same image also runs on other container hosts (Render, Koyeb, Fly.io, Cloud Run); `$PORT` is honoured.
 
 ## Development
 

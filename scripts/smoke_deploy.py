@@ -2,7 +2,7 @@
 
 Usage:
   python scripts/smoke_deploy.py https://your-app.vercel.app        # through the Vercel rewrite
-  python scripts/smoke_deploy.py https://your-api.koyeb.app         # the API directly
+  python scripts/smoke_deploy.py https://user-space.hf.space        # the API directly
 
 Creates a throwaway account (smoke-<random>@example.com) plus one backtest, and cleans up the
 simulation and note it creates. Sentiment, research memory, and copilot steps run only when the

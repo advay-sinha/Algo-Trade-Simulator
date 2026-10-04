@@ -1,4 +1,4 @@
-# Vercel serves only the frontend build; the API runs on Koyeb.
+# Vercel serves only the frontend build; the API runs in a Hugging Face Space.
 .venv
 backend
 scripts

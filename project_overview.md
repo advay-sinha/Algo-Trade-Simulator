@@ -139,11 +139,11 @@ All routes are prefixed with `/api`.
 | 6 | Copilot 2.0 — tool-calling assistant that runs backtests, trains models, explains results | Done |
 | 7 | NLP research memory — FinBERT sentiment, embeddings stored on MongoDB documents, user-scoped retrieval (NumPy or Atlas Vector Search), copilot citations | Done |
 | 8 | Production hardening — route modules, API + unit tests, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
-| 9 | Cloud deployment — Vercel (static frontend) + Koyeb (API container) behind a same-origin `/api` rewrite, MongoDB Atlas, deployment smoke test | Ready to deploy |
+| 9 | Cloud deployment — Vercel (static frontend) + Hugging Face Docker Space (API container, deployed by GitHub Actions after CI) behind a same-origin `/api` rewrite, MongoDB Atlas, deployment smoke test | Ready to deploy |
 
 Build order rationale: make the finance core credible first (backtesting → risk), then ML workflows, then LLM/NLP as supporting intelligence layers, then packaging and deployment. The interactive console comes early so every engine ships its UI into one consistent design system.
 
-**Deployment target.** The frontend is served by Vercel and the API runs as a Docker container on Koyeb; Vercel rewrites `/api/*` to Koyeb so the browser sees a single origin (no CORS, no API URL in the build). The API was kept serverless-compatible throughout (an earlier plan ran it as a Vercel function; the scientific Python stack, 318 MB installed on Linux, exceeds that limit), which keeps it stateless on a container host that sleeps and restarts:
+**Deployment target.** The frontend is served by Vercel and the API runs as a Docker container in a Hugging Face Space (free CPU tier: 2 vCPU, 16 GB); a GitHub Actions workflow pushes the API to the Space after CI passes, and Vercel rewrites `/api/*` to the Space so the browser sees a single origin (no CORS, no API URL in the build). The API was kept serverless-compatible throughout (an earlier plan ran it as a Vercel function; the scientific Python stack, 318 MB installed on Linux, exceeds that limit), which keeps it stateless on a container host that sleeps and restarts:
 
 - No source-of-truth state in process memory — MongoDB (Atlas in production) for all persistence; the in-memory store is for local development and tests only.
 - No writes outside the temp directory — trained model artifacts live in MongoDB GridFS; research-note embeddings live on MongoDB documents.
@@ -195,7 +195,7 @@ No `.env` file is required to start; defaults run the whole app in development m
 - **No browser end-to-end tests in CI** — CI runs the backend unit and API tests plus the frontend type check and build; interface checks are run manually.
 - **Rate limits are per process without Redis** — when Upstash isn't configured, each server instance counts separately; with Redis unreachable, limits fail open.
 - **Untyped responses** — request bodies are Pydantic models, but most responses are plain dictionaries, so the OpenAPI schema doesn't describe response shapes and frontend types are maintained by hand.
-- **Free-tier hosting limits** — the API instance sleeps when idle (cold starts) and has a fraction of one CPU, so model training and the copilot's first message after a start can take up to about a minute; Yahoo Finance may rate-limit cloud IPs (fallback quotes are flagged).
+- **Free-tier hosting limits** — the API Space pauses after about two days without traffic and the next request waits for a restart; Yahoo Finance may rate-limit cloud IPs (fallback quotes are flagged).
 - **Rate limits can be sidestepped by calling the API host directly** — client IPs come from the proxy's `X-Forwarded-For`, which a caller bypassing the frontend domain can set. This only weakens per-IP limits; authentication and ownership checks are unaffected.
 
 ## 10. Repository layout
