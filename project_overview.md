@@ -178,7 +178,7 @@ No `.env` file is required to start; defaults run the whole app in development m
 | Type check | `npm run check` |
 | Frontend build | `npm run build` |
 | Backend syntax check | `python -m py_compile backend/main.py` |
-| Mongo connectivity check | `python backend/test.py` |
+| Connection checks (HF token, MongoDB) | `python scripts/check_connections.py` (`--hf`, `--mongo`); opt-in pytest: `LIVE_CHECKS=1 pytest backend/tests/test_live_connections.py` |
 | Tests | `pip install -r backend/requirements-dev.txt`, then `pytest backend/tests` |
 | Deployed size check | `python scripts/check_bundle_size.py` |
 | Full local stack | `docker compose up --build` (http://localhost:8080) |

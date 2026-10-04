@@ -70,7 +70,7 @@ Algo-Trade-Simulator/
 │       ├── pages/           # One module per route
 │       └── components/      # ui/ primitives, charts/, layout/ shell, copilot/ drawer
 ├── deploy/nginx.conf        # Frontend container: static files + /api proxy
-├── scripts/                 # Deployed bundle size check, local stand-in for the HF inference API
+├── scripts/                 # Connection checks (HF, MongoDB), deployed bundle size check, local HF inference stand-in
 ├── .github/workflows/       # CI
 ├── Dockerfile               # Backend image
 ├── Dockerfile.client        # Frontend image
@@ -136,7 +136,7 @@ Create `backend/.env` (or export the variables) once you have a MongoDB instance
 | `STRICT_DB` | Fail requests with 503 instead of falling back to in-memory storage when MongoDB is unavailable | `false` locally, `true` on Vercel |
 | `MONGO_MAX_POOL_SIZE` | Connection pool size per process | `5` |
 
-Verify connectivity with `python backend/test.py`. The database connection is created on the first request. Without `STRICT_DB`, an unreachable MongoDB logs a warning and the server falls back to the in-memory store — check the log to confirm which store is active.
+Verify connectivity with `python scripts/check_connections.py --mongo`. The database connection is created on the first request. Without `STRICT_DB`, an unreachable MongoDB logs a warning and the server falls back to the in-memory store — check the log to confirm which store is active.
 
 ### When you want the chat copilot
 
@@ -310,7 +310,7 @@ Strategy and model evaluation in this project follows standard quant-research di
 - `npm run check` — TypeScript type check (run before committing frontend changes).
 - `npm run build` — production frontend build.
 - `python -m py_compile backend/main.py` — quick backend syntax check.
-- `python backend/test.py` — MongoDB connectivity check.
+- `python scripts/check_connections.py` — checks the Hugging Face token (plus the sentiment and embedding models) and the MongoDB connection with the backend's settings; `--hf` / `--mongo` for one, `--no-inference` to skip model calls. Prints PASS/FAIL with a fix hint, never secrets; exit code 1 on failure. `python backend/test.py` runs the MongoDB part only.
 - `python scripts/fake_hf_inference.py` — local stand-in for the Hugging Face inference API (keyword-based, not a real model) for offline development; run the backend with `HF_TOKEN=local HF_INFERENCE_URL=http://127.0.0.1:8765`.
 - `python scripts/check_bundle_size.py` — installed size of the deployed Python dependencies (warns above 250 MB, fails above 500 MB).
 - Keep this README in sync when adding scripts, endpoints, or environment variables.
@@ -323,6 +323,8 @@ Install the test dependencies once, then run the suite from the repository root 
 pip install -r backend/requirements-dev.txt
 pytest backend/tests
 ```
+
+Live connection checks are opt-in (they use the network and your `backend/.env`): `LIVE_CHECKS=1 pytest backend/tests/test_live_connections.py -v`.
 
 The suite covers feature leakage, the backtesting engine, risk metrics, ML training and the registry, experiment tracking, copilot tools and providers, the HTTP API contract (auth, ownership, validation, rate limits), and the shared cache and rate limiter.
 
