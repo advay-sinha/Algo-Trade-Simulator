@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchModel, predictWithModel } from "../api";
 import { ModelConfiguration, ModelEvaluation, ModelKpis, ModelVerdict, SignalCard } from "../components/ml/ModelReport";
+import { SaveToMemoryButton } from "../components/research/SaveToMemoryButton";
 import { Icon } from "../components/ui/Icon";
 import { DataSourceBadge, EmptyState, ErrorState, SkeletonRows } from "../components/ui/primitives";
 import { SECTIONS } from "../content/sections";
@@ -104,6 +105,7 @@ export function ModelDetailPage() {
             </p>
           </div>
           <div className="section-actions">
+            <SaveToMemoryButton kind="model" refId={data.id} />
             <Link to={SECTIONS.models.route} className="btn">
               <Icon name="refresh" />
               Train another

@@ -49,6 +49,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
       { to: SECTIONS.models.route, label: SECTIONS.models.navLabel, icon: "layers" },
       { to: SECTIONS.backtests.route, label: SECTIONS.backtests.navLabel, icon: "activity" },
       { to: SECTIONS.simulations.route, label: SECTIONS.simulations.navLabel, icon: "wallet" },
+      { to: SECTIONS.research.route, label: SECTIONS.research.navLabel, icon: "database" },
     ],
   },
   {

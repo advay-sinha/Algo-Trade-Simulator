@@ -1376,3 +1376,58 @@ a.list-row:hover {
   justify-content: center;
   color: var(--fg-secondary);
 }
+
+/* Research memory --------------------------------------------------------------------------- */
+.research-grid {
+  align-items: start;
+}
+.note-row {
+  align-items: flex-start;
+}
+.note-body {
+  margin: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.similarity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  flex: none;
+  min-width: 64px;
+}
+.similarity-bar {
+  display: block;
+  width: 64px;
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-l2);
+  border: 1px solid var(--border-l1);
+  overflow: hidden;
+}
+.similarity-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--series-1);
+}
+.sentiment-text {
+  min-width: 220px;
+  max-width: 480px;
+  overflow-wrap: anywhere;
+}
+.copilot-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+@media (max-width: 900px) {
+  .research-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

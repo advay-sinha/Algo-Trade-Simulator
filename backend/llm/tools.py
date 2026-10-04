@@ -20,10 +20,11 @@ from backend.models.common import SYMBOL_PATTERN
 from backend.models.ml import TrainModelRequest
 from backend.services import market_data_service as market
 from backend.services.backtesting_service import bars_from_points
+from backend.services.hf_inference import NlpError
 from backend.services.research_actions import ActionError, model_signal_for_user, run_backtest_for_user, train_model_for_user
 from backend.strategies import list_strategies
 
-STATE_CHANGING = {"run_backtest", "train_model", "create_simulation"}
+STATE_CHANGING = {"run_backtest", "train_model", "create_simulation", "save_research_note"}
 
 
 @dataclass
@@ -69,6 +70,18 @@ class TrainArgs(BaseModel):
 class SignalArgs(BaseModel):
     registry_id: Optional[str] = Field(default=None, max_length=64, description="Model id from the registry (e.g. from train_model's modelId).")
     symbol: Optional[str] = Field(default=None, pattern=SYMBOL_PATTERN)
+
+
+class NoteSearchArgs(BaseModel):
+    query: str = Field(min_length=1, max_length=500, description="What to look for in the user's saved notes and reports.")
+    k: int = Field(default=5, ge=1, le=10)
+
+
+class NoteSaveArgs(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    body: str = Field(min_length=1, max_length=5000)
+    kind: Literal["note", "backtest", "model"] = Field(default="note", description="'backtest'/'model' save a summary of that saved object (pass ref_id).")
+    ref_id: Optional[str] = Field(default=None, max_length=64, description="Backtest id or model id when kind is backtest/model.")
 
 
 class SimulationArgs(BaseModel):
@@ -228,6 +241,26 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         ctx.actions.append({"type": "simulation", "id": record["id"], "label": f"Simulation {record['symbol']} · {record['startingCapital']:,.0f}", "path": "/simulations"})
         return {k: record.get(k) for k in ("id", "symbol", "strategy", "startingCapital", "status", "createdAt")}
 
+    async def search_research_notes(query: str, k: int = 5) -> Dict[str, Any]:
+        from backend.llm import rag
+
+        try:
+            found = await rag.query(ctx.store, ctx.user_id, query, k)
+        except NlpError as exc:
+            raise ActionError(exc.message, status=exc.status_code) from exc
+        return {"searched": found["searched"], "hits": found["hits"]}
+
+    async def save_research_note(title: str, body: str, kind: str = "note", ref_id: Optional[str] = None) -> Dict[str, Any]:
+        from backend.llm import rag
+
+        try:
+            record = await rag.create_note(ctx.store, ctx.user_id, kind, title, body, ref_id)
+        except rag.NoteError as exc:
+            raise ActionError(exc.message, status=exc.status) from exc
+        created = record.pop("_created")
+        ctx.actions.append({"type": "note", "id": record["id"], "label": f"Note · {record['title']}", "path": "/research"})
+        return {"id": record["id"], "title": record["title"], "created": created, "indexed": bool(record.get("embedding")), "sentiment": record.get("sentiment")}
+
     specs = [
         (get_quote, "get_quote", "Latest quotes for up to 10 symbols, with data source flags.", QuoteArgs),
         (get_price_history, "get_price_history", "Summary of a symbol's daily price history over a range (return, high/low, volatility).", HistoryArgs),
@@ -239,5 +272,7 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         (train_model, "train_model", "Train AND REGISTER an ML model; returns unseen-window accuracy vs baseline and a cost-aware backtest vs buy-and-hold.", TrainArgs),
         (get_model_signal, "get_model_signal", "Latest signal from a registered model (by id, or the newest model for a symbol).", SignalArgs),
         (create_simulation, "create_simulation", "Create AND SAVE a paper-trading simulation for the user.", SimulationArgs),
+        (search_research_notes, "search_research_notes", "Semantic search over the user's saved research notes and saved backtest/model summaries; returns the closest matches with similarity scores.", NoteSearchArgs),
+        (save_research_note, "save_research_note", "SAVE a research note to the user's research memory (or a summary of a saved backtest/model).", NoteSaveArgs),
     ]
     return [StructuredTool.from_function(coroutine=fn, name=name, description=description, args_schema=schema) for fn, name, description, schema in specs]

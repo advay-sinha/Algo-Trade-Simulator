@@ -31,6 +31,11 @@ import type {
   ModelSummary,
   ModelSignal,
   CopilotEvent,
+  SentimentResponse,
+  ResearchNote,
+  NoteCreatePayload,
+  NoteKind,
+  RagResult,
 } from "./types";
 
 // Same-origin by default: the Vite dev server proxies /api to the backend, and production
@@ -279,6 +284,26 @@ export function fetchModel(token: string, id: string) {
 
 export function predictWithModel(token: string, body: { modelId?: string; symbol?: string }) {
   return request<ModelSignal>("/ml/predict", { method: "POST", body, token });
+}
+
+export function analyzeSentiment(token: string, texts: string[]) {
+  return request<SentimentResponse>("/research/sentiment", { method: "POST", body: { texts }, token });
+}
+
+export function fetchNotes(token: string, kind?: NoteKind) {
+  return request<ResearchNote[]>(`/research/notes${kind ? `?kind=${kind}` : ""}`, { token });
+}
+
+export function createNote(token: string, payload: NoteCreatePayload) {
+  return request<ResearchNote>("/research/notes", { method: "POST", body: payload, token });
+}
+
+export function deleteNote(token: string, id: string) {
+  return request<void>(`/research/notes/${encodeURIComponent(id)}`, { method: "DELETE", token });
+}
+
+export function queryNotes(token: string, query: string, k = 5) {
+  return request<RagResult>("/research/rag/query", { method: "POST", body: { query, k }, token });
 }
 
 /**

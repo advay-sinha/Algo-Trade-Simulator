@@ -72,6 +72,14 @@ class Settings(BaseModel):
     mlflow_tracking_username: Optional[str] = Field(default_factory=lambda: os.getenv("MLFLOW_TRACKING_USERNAME"))
     mlflow_tracking_password: Optional[str] = Field(default_factory=lambda: os.getenv("MLFLOW_TRACKING_PASSWORD"))
     mlflow_experiment_name: str = Field(default_factory=lambda: os.getenv("MLFLOW_EXPERIMENT_NAME", "algo-trade-lab"))
+    # Research NLP (Phase 7): hosted Hugging Face inference by default; "local" uses transformers.
+    hf_token: Optional[str] = Field(default_factory=lambda: (os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACEHUB_API_TOKEN") or "").strip() or None)
+    nlp_provider: str = Field(default_factory=lambda: os.getenv("NLP_PROVIDER", "hf-api").strip().lower() or "hf-api")
+    sentiment_model: str = Field(default_factory=lambda: os.getenv("SENTIMENT_MODEL", "ProsusAI/finbert"))
+    embedding_model: str = Field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"))
+    hf_inference_url: str = Field(default_factory=lambda: os.getenv("HF_INFERENCE_URL", "https://router.huggingface.co/hf-inference/models"))
+    # Name of an Atlas Vector Search index on research_notes.embedding; unset = exact NumPy scan.
+    atlas_vector_index: Optional[str] = Field(default_factory=lambda: os.getenv("ATLAS_VECTOR_INDEX") or None)
     yahoo_user_agent: str = Field(
         default_factory=lambda: os.getenv(
             "YAHOO_USER_AGENT",

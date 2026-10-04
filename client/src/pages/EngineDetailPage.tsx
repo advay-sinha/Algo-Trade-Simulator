@@ -309,6 +309,7 @@ function CopilotWorkbench() {
             ["Strategies & backtests", "list_strategies, run_backtest, get_backtest_report, list_backtests"],
             ["Models", "train_model, get_model_signal"],
             ["Simulations", "portfolio_overview, create_simulation"],
+            ["Research memory", "search_research_notes, save_research_note"],
           ].map(([group, tools]) => (
             <li className="list-row" key={group}>
               <div className="list-row-main">
@@ -318,6 +319,29 @@ function CopilotWorkbench() {
             </li>
           ))}
         </ul>
+      </div>
+    </div>
+  );
+}
+
+function ResearchWorkbench() {
+  const { status } = useShell();
+  return (
+    <div className="stack">
+      {status?.nlp?.configured === false ? (
+        <Notice tone="warn" icon="alert">
+          The Hugging Face inference service isn't configured on this server yet (HF_TOKEN), so search and sentiment are unavailable. Notes still save.
+        </Notice>
+      ) : null}
+      <Notice>
+        Save notes and summaries of your backtests and models, search them by meaning, and score headlines with FinBERT. The copilot reads your closest
+        notes before answering and cites the ones it used.
+      </Notice>
+      <div>
+        <Link to={SECTIONS.research.route} className="btn btn-primary">
+          <Icon name="database" />
+          Open research memory
+        </Link>
       </div>
     </div>
   );
@@ -348,6 +372,7 @@ const WORKBENCHES: Record<string, (engine: EngineInfo) => ReactNode> = {
   strategy: () => <StrategyWorkbench />,
   copilot: () => <CopilotWorkbench />,
   risk: () => <RiskWorkbench />,
+  research: () => <ResearchWorkbench />,
 };
 
 export function EngineDetailPage() {

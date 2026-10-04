@@ -20,6 +20,7 @@ const BacktestDetailPage = lazy(() => import("./pages/BacktestDetailPage").then(
 const SimulationsPage = lazy(() => import("./pages/SimulationsPage").then((m) => ({ default: m.SimulationsPage })));
 const HistoryPage = lazy(() => import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
 const PriceHistoryPage = lazy(() => import("./pages/PriceHistoryPage").then((m) => ({ default: m.PriceHistoryPage })));
+const ResearchPage = lazy(() => import("./pages/ResearchPage").then((m) => ({ default: m.ResearchPage })));
 const SafetyPage = lazy(() => import("./pages/SafetyPage").then((m) => ({ default: m.SafetyPage })));
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
@@ -86,6 +87,7 @@ function AppRoutes() {
           { path: "backtests", element: <BacktestsPage /> },
           { path: "backtests/:backtestId", element: <BacktestDetailPage /> },
           { path: "simulations", element: <SimulationsPage /> },
+          { path: "research", element: <ResearchPage /> },
           { path: "history", element: <HistoryPage /> },
           { path: "history/prices", element: <PriceHistoryPage /> },
           { path: "safety", element: <SafetyPage /> },

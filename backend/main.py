@@ -8,7 +8,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api import analytics, auth, backtests, copilot, market, ml, simulations, system
+from backend.api import analytics, auth, backtests, copilot, market, ml, research, simulations, system
 from backend.logging_config import RequestContextMiddleware, configure_logging
 from backend.config import APP_VERSION, IS_PRODUCTION, allowed_cors_origins, settings
 from backend.deps import get_current_user, get_store  # re-exported for tests and tooling
@@ -42,7 +42,7 @@ if settings.enable_dev_endpoints:
         logger.warning("DEV ENDPOINTS ENABLED: /api/dev/auth/bypass issues sessions without a password. Local development only.")
 
 # Every route lives under /api so the SPA and the API can share one origin.
-for module in (auth, market, analytics, simulations, backtests, ml, copilot, system):
+for module in (auth, market, analytics, simulations, backtests, ml, research, copilot, system):
     app.include_router(module.router)
 
 __all__ = ["app", "get_current_user", "get_store", "InMemoryStore", "MongoStore", "SimulationInput"]

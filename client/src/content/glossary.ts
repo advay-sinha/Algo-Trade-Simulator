@@ -237,11 +237,22 @@ export const GLOSSARY = {
   },
   sentiment: {
     term: "Sentiment score",
-    definition: "A financial language model's read of text as bullish, bearish, or neutral, with a confidence.",
+    definition: "A financial language model's read of text as bullish, bearish, or neutral. Confidence is the model's probability for the winning label.",
+    caveat: "Headline tone is not a trading signal on its own; the model reads wording, not the market's reaction.",
   },
   rag: {
     term: "Retrieval (RAG)",
     definition: "Before answering, the copilot looks up your most relevant saved notes and reports and cites them.",
+  },
+  similarity: {
+    term: "Similarity",
+    definition: "How close two texts are in meaning: the cosine of the angle between their embedding vectors.",
+    formula: "cos(a, b) = a · b / (‖a‖ ‖b‖), from −1 to 1",
+    caveat: "Scores compare notes against one query; there is no universal cut-off for relevant.",
+  },
+  embedding: {
+    term: "Embedding",
+    definition: "A list of numbers a language model assigns to a text so that texts with similar meaning end up close together.",
   },
 } satisfies Record<string, GlossaryEntry>;
 

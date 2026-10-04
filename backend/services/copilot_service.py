@@ -110,7 +110,7 @@ async def stream_chat(
     history: Sequence[Dict[str, str]],
     llm_factory: Optional[Callable[[str], Any]] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
-    """Yields events: tool_start, tool_end, message, actions, error, done."""
+    """Yields events: sources, tool_start, tool_end, message, actions, error, done."""
     if not configured() and llm_factory is None:
         yield {"type": "message", "content": NOT_CONFIGURED}
         yield {"type": "done"}
@@ -125,6 +125,13 @@ async def stream_chat(
     tools = build_tools(ctx)
     factory = llm_factory or make_llm
     messages = [SystemMessage(content=SYSTEM_PROMPT), *history_to_messages(history), HumanMessage(content=message)]
+    # Research memory: the user's most relevant saved notes go in as context the model must cite.
+    from backend.llm import rag
+
+    sources = await rag.retrieve_for_prompt(store, user_id, message)
+    if sources:
+        messages.insert(1, SystemMessage(content=rag.prompt_context(sources)))
+        yield {"type": "sources", "sources": sources}
     try:
         async for event in run_agent(_FallbackModel(factory, tools), _FallbackModel(factory, None), messages, tools):
             yield event
@@ -141,8 +148,11 @@ async def collect_chat(user_id: str, store: Any, message: str, history: Sequence
     reply_parts: List[str] = []
     actions: List[Dict[str, Any]] = []
     tools_used: List[str] = []
+    citations: List[Dict[str, Any]] = []
     async for event in stream_chat(user_id, store, message, history, llm_factory):
-        if event["type"] == "message":
+        if event["type"] == "sources":
+            citations = [{"id": s["id"], "title": s["title"], "kind": s["kind"], "score": s["score"], "path": s["path"]} for s in event["sources"]]
+        elif event["type"] == "message":
             reply_parts.append(event["content"])
         elif event["type"] == "error":
             reply_parts.append(event["message"])
@@ -150,4 +160,4 @@ async def collect_chat(user_id: str, store: Any, message: str, history: Sequence
             actions = event["actions"]
         elif event["type"] == "tool_end":
             tools_used.append(event["name"])
-    return {"reply": "\n\n".join(part for part in reply_parts if part) or GENERIC_FAILURE, "citations": [], "actions": actions, "toolsUsed": tools_used}
+    return {"reply": "\n\n".join(part for part in reply_parts if part) or GENERIC_FAILURE, "citations": citations, "actions": actions, "toolsUsed": tools_used}

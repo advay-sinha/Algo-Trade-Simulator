@@ -193,6 +193,7 @@ export interface SystemStatus {
   copilotConfigured: boolean;
   copilotProvider?: { provider: string; model: string } | null;
   experimentTracking?: boolean;
+  nlp?: NlpStatus;
   offlineMarketDataAllowed: boolean;
   marketData: {
     lastSource: DataSource | null;
@@ -487,7 +488,7 @@ export interface ModelSignal {
 /* Copilot ------------------------------------------------------------------------------------ */
 
 export interface CopilotAction {
-  type: "backtest" | "model" | "simulation";
+  type: "backtest" | "model" | "simulation" | "note";
   id: string;
   label: string;
   path: string;
@@ -498,5 +499,82 @@ export type CopilotEvent =
   | { type: "tool_end"; id: string; name: string; ok: boolean; error: string | null; result: Record<string, unknown> | null }
   | { type: "message"; content: string; budgetReached?: boolean }
   | { type: "actions"; actions: CopilotAction[] }
+  | { type: "sources"; sources: RagHit[] }
   | { type: "error"; message: string }
   | { type: "done" };
+
+// --- Research NLP (sentiment, notes, retrieval) ---------------------------------------------
+
+export interface NlpStatus {
+  configured: boolean;
+  provider: "hf-api" | "local";
+  sentimentModel: string;
+  embeddingModel: string;
+  vectorSearch: "atlas" | "exact";
+}
+
+export type SentimentLabel = "bullish" | "bearish" | "neutral";
+
+export interface SentimentScore {
+  label: SentimentLabel;
+  /** Probability of the winning label (0–1); null when the model returned no known label. */
+  confidence: number | null;
+  scores: Record<SentimentLabel, number | null>;
+}
+
+export interface SentimentResult extends SentimentScore {
+  text: string;
+}
+
+export interface SentimentResponse {
+  provider: string;
+  model: string;
+  results: SentimentResult[];
+}
+
+export type NoteKind = "note" | "backtest" | "model";
+
+export interface ResearchNote {
+  id: string;
+  kind: NoteKind;
+  title: string;
+  body: string;
+  refId: string | null;
+  symbol: string | null;
+  tags: string[];
+  sentiment: SentimentScore | null;
+  embeddingModel: string | null;
+  /** False until the note has an embedding (saved while NLP was unavailable). */
+  indexed: boolean;
+  createdAt: string;
+}
+
+export interface NoteCreatePayload {
+  kind?: NoteKind;
+  title?: string;
+  body?: string;
+  refId?: string;
+  tags?: string[];
+}
+
+export interface RagHit {
+  id: string;
+  title: string;
+  kind: NoteKind;
+  refId: string | null;
+  symbol: string | null;
+  snippet: string;
+  /** Cosine similarity, -1..1 (higher = closer in meaning). */
+  score: number;
+  createdAt: string;
+  path: string;
+}
+
+export interface RagResult {
+  embeddingModel: string;
+  searched: number;
+  reindexed: number;
+  pendingIndex: number;
+  method: "numpy" | "atlas";
+  hits: RagHit[];
+}

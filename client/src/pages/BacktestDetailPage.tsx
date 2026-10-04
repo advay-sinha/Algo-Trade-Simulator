@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { fetchBacktest, fetchBacktestTrades } from "../api";
 import { AssumptionsList, BacktestCharts, BacktestKpis, TradesTable } from "../components/backtest/BacktestResultView";
 import { RiskPanel } from "../components/backtest/RiskPanel";
+import { SaveToMemoryButton } from "../components/research/SaveToMemoryButton";
 import { Icon } from "../components/ui/Icon";
 import { DataSourceBadge, EmptyState, ErrorState, SkeletonRows } from "../components/ui/primitives";
 import { SECTIONS } from "../content/sections";
@@ -81,6 +82,7 @@ export function BacktestDetailPage() {
             </p>
           </div>
           <div className="section-actions">
+            <SaveToMemoryButton kind="backtest" refId={data.id} />
             <Link to={`${SECTIONS.backtests.route}?symbol=${encodeURIComponent(data.symbol)}&strategy=${encodeURIComponent(data.strategy.id)}`} className="btn">
               <Icon name="refresh" />
               Run again with changes

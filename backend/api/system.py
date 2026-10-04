@@ -25,7 +25,7 @@ from backend.models.common import SYMBOL_PATTERN, ChartInterval, ChartRange, par
 from backend.models.copilot import CopilotActionRequest, CopilotChatRequest
 from backend.models.ml import FeaturesRequest, PredictRequest, TrainModelRequest
 from backend.models.simulation import SimulationInput, SimulationUpdate
-from backend.services import copilot_service, experiment_tracking
+from backend.services import copilot_service, experiment_tracking, hf_inference
 from backend.services import market_data_service as market
 from backend.services.backtesting_service import BacktestConfig, bars_from_points, run_backtest
 from backend.services.clock import now
@@ -57,6 +57,7 @@ async def system_status(
         "copilotConfigured": copilot_service.configured(),
         "copilotProvider": copilot_service.provider_info(),
         "experimentTracking": experiment_tracking.enabled(),
+        "nlp": hf_inference.info() | {"vectorSearch": "atlas" if settings.atlas_vector_index and isinstance(store, MongoStore) else "exact"},
         "offlineMarketDataAllowed": settings.allow_offline_market_data,
         "marketData": dict(MARKET_HEALTH),
         "rateLimits": {

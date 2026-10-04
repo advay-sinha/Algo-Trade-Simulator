@@ -2,14 +2,14 @@
 import * as Popover from "@radix-ui/react-popover";
 import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchBacktests, fetchModels, fetchSimulations, fetchTrainingRuns } from "../api";
+import { fetchBacktests, fetchModels, fetchNotes, fetchSimulations, fetchTrainingRuns } from "../api";
 import { Icon } from "../components/ui/Icon";
 import { EmptyState, ErrorState, Pagination, SectionHeader, SkeletonRows } from "../components/ui/primitives";
 import { SECTIONS } from "../content/sections";
 import { formatDateTime, formatFraction, formatMoney, formatSignedFraction } from "../lib/format";
 import { useAuthedQuery, useSlashFocus } from "../lib/hooks";
 
-type RecordType = "backtest" | "model" | "simulation" | "training";
+type RecordType = "backtest" | "model" | "simulation" | "training" | "note";
 
 interface ResearchRecord {
   key: string;
@@ -23,12 +23,18 @@ interface ResearchRecord {
 }
 
 const PAGE_SIZE = 10;
-const TYPE_LABEL: Record<RecordType, string> = { backtest: "Backtest", model: "ML model", simulation: "Simulation", training: "Training run" };
+const TYPE_LABEL: Record<RecordType, string> = { backtest: "Backtest", model: "ML model", simulation: "Simulation", training: "Training run", note: "Research note" };
 
 export function HistoryPage() {
   const records = useAuthedQuery(
     async (token) => {
-      const [backtests, models, simulations, runs] = await Promise.all([fetchBacktests(token), fetchModels(token), fetchSimulations(token), fetchTrainingRuns(token)]);
+      const [backtests, models, simulations, runs, notes] = await Promise.all([
+        fetchBacktests(token),
+        fetchModels(token),
+        fetchSimulations(token),
+        fetchTrainingRuns(token),
+        fetchNotes(token),
+      ]);
       const rows: ResearchRecord[] = [
         ...models.map((item) => ({
           key: `m-${item.id}`,
@@ -67,6 +73,16 @@ export function HistoryPage() {
           value: `${formatSignedFraction(run.metrics.totalReturn)} in-sample`,
           status: "indicative",
           date: run.trainedAt,
+        })),
+        ...notes.map((note) => ({
+          key: `n-${note.id}`,
+          type: "note" as const,
+          symbol: note.symbol ?? "—",
+          detail: note.title,
+          value: note.sentiment ? `${note.sentiment.label} tone` : "—",
+          status: note.indexed ? (note.kind === "note" ? "note" : `${note.kind} summary`) : "not indexed yet",
+          date: note.createdAt,
+          href: SECTIONS.research.route,
         })),
       ];
       return rows;

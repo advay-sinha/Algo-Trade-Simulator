@@ -4,7 +4,7 @@ import { streamCopilot } from "../../api";
 import { describeError } from "../../lib/errors";
 import { formatFraction, formatSignedFraction } from "../../lib/format";
 import { useAuthed } from "../../lib/session";
-import type { CopilotAction, CopilotEvent } from "../../types";
+import type { CopilotAction, CopilotEvent, RagHit } from "../../types";
 import { Icon } from "../ui/Icon";
 import { SlideOver } from "../ui/overlays";
 import { Notice } from "../ui/primitives";
@@ -14,6 +14,7 @@ const SUGGESTIONS = [
   "Train a gradient boosting model on MSFT and tell me if it beats its baseline",
   "Summarize my simulations",
   "Create a simulation for NVDA with 25k",
+  "What do my research notes say about drawdowns?",
 ];
 const HISTORY_TURNS = 8;
 
@@ -44,6 +45,8 @@ interface Turn {
   content: string;
   activities: Activity[];
   actions: CopilotAction[];
+  /** Research notes retrieved as context for this reply (cited inline as [Note: title]). */
+  sources?: RagHit[];
   error?: string;
   pending?: boolean;
 }
@@ -138,6 +141,8 @@ export function CopilotDrawer({
       updateLast((turn) => ({ ...turn, content: [turn.content, event.content].filter(Boolean).join("\n\n") }));
     } else if (event.type === "actions") {
       updateLast((turn) => ({ ...turn, actions: event.actions }));
+    } else if (event.type === "sources") {
+      updateLast((turn) => ({ ...turn, sources: event.sources }));
     } else if (event.type === "error") {
       updateLast((turn) => ({ ...turn, error: event.message }));
     }
@@ -240,6 +245,23 @@ export function CopilotDrawer({
                       <ActivityRow key={activity.id} activity={activity} />
                     ))}
                   </ul>
+                ) : null}
+                {turn.sources?.length ? (
+                  <div className="copilot-sources" aria-label="Research notes consulted">
+                    <span className="text-meta">Notes consulted</span>
+                    {turn.sources.map((source) => (
+                      <Link
+                        key={source.id}
+                        to={source.path}
+                        className="status-pill"
+                        title={`Similarity ${source.score.toFixed(2)}`}
+                        onClick={() => onOpenChange(false)}
+                      >
+                        <Icon name="database" />
+                        {source.title}
+                      </Link>
+                    ))}
+                  </div>
                 ) : null}
                 {turn.content ? <div className="bubble">{turn.content}</div> : null}
                 {turn.pending && !turn.content && !turn.error ? <span className="text-meta">Thinking…</span> : null}

@@ -13,10 +13,11 @@ The project is evolving from a trading simulator into a modular quant research p
 - **Feature engineering & dataset builder** — turn daily bars into a model-ready dataset: returns, lagged returns, rolling volatility, RSI, MACD, Bollinger position, moving-average ratios, volume, and momentum features; direction, return-bucket, or volatility-regime labels with a configurable horizon; and a time-ordered train / embargo / test split. Every feature uses only past data and every label only future data (enforced by automated tests). The preview reports shape, split boundaries, label balance, and training-set feature statistics.
 - **ML model lab** — train logistic regression, random forest, or gradient-boosting classifiers on the leakage-free datasets. Each run is judged on a later, unseen window: accuracy next to the majority-class baseline, ROC-AUC, precision / recall / F1, a confusion matrix, and a cost-aware backtest of the model's signals against buy-and-hold. Every run is saved in a per-user model registry (features, window, hyperparameters, metrics, artifact) and can produce a live signal traceable to the exact model. Optional MLflow experiment tracking (works with a free hosted DagsHub tracking server).
 - **Strategy lab** — a quick zero-cost SMA crossover backtest over six months of daily data with real (in-sample) return, drawdown, Sharpe, and win rate, a price-with-averages chart, and a naive momentum signal.
+- **Research memory (NLP)** — save research notes, or one-click summaries of backtests and models, and find them again by meaning (sentence embeddings + cosine similarity, scoped to your account). Score headlines as bullish, bearish, or neutral with FinBERT. Inference runs on the hosted Hugging Face service, so nothing heavy is installed on the server; notes saved while it is unavailable are indexed automatically later.
 - **Simulations** — create, track, update, and delete simulated portfolio runs per user.
 - **Accounts & sessions** — email/password signup and login, bcrypt-hashed passwords, bearer-token sessions with 7-day expiry, server-side logout, session tokens stored only as SHA-256 hashes, and per-client rate limiting on authentication.
 - **Analytics dashboard** — simulation totals, trained strategies, recent simulations, and one-month watchlist trends.
-- **Research copilot (tool-calling)** — a LangChain agent on free open-weight models (Groq, OpenRouter, Hugging Face), a fully local Ollama model, or OpenAI, that runs real platform tools on your behalf: quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, and simulation creation. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw.
+- **Research copilot (tool-calling)** — a LangChain agent on free open-weight models (Groq, OpenRouter, Hugging Face), a fully local Ollama model, or OpenAI, that runs real platform tools on your behalf: quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, simulation creation, and research-note search and saving. Before answering, it reads your saved notes most relevant to the question and cites the ones it used. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw.
 - **Flexible persistence** — MongoDB (Atlas or local) for durable storage, or a zero-setup in-memory mode for local development; a strict mode refuses to run without the database instead of silently losing data.
 - **Input hardening** — ticker symbols, chart ranges, and simulation states are validated before any outbound request; error responses never expose internal details.
 - **Operations** — structured JSON logs with a per-request `X-Request-ID`, an optional shared Redis (Upstash) cache and rate limiter for multi-instance hosting, pinned dependencies, a CI pipeline (tests, type check, build, deployed-size budget), and Docker Compose for a one-command local stack.
@@ -31,6 +32,7 @@ The project is evolving from a trading simulator into a modular quant research p
 | Market data | Yahoo Finance via `yfinance` with raw-API and offline fallbacks |
 | Copilot | LangChain (langchain-core, langchain-openai) tool-calling over any OpenAI-compatible chat API — Groq, OpenRouter, Hugging Face, Ollama, OpenAI — streamed via Server-Sent Events |
 | ML | scikit-learn, pandas, NumPy; optional MLflow tracking over REST (e.g. DagsHub) |
+| NLP | Hugging Face inference over REST — FinBERT sentiment, all-MiniLM-L6-v2 embeddings; NumPy cosine search or MongoDB Atlas Vector Search |
 | Operations | Structured logging, Upstash Redis (REST) for shared cache and rate limits, GitHub Actions CI, Docker / Docker Compose |
 
 ## Project structure
@@ -45,11 +47,11 @@ Algo-Trade-Simulator/
 │   ├── stores.py            # MongoDB and in-memory stores (shared interface)
 │   ├── logging_config.py    # Structured logging and request-id middleware
 │   ├── models/              # Request/response models and shared validated types
-│   ├── services/            # Market data (cached), backtesting engine, rate limiting, Upstash client, copilot, model registry
+│   ├── services/            # Market data (cached), backtesting engine, rate limiting, Upstash client, copilot, model registry, HF inference, sentiment
 │   ├── strategies/          # Strategy interface + registry: buy-and-hold, SMA crossover, momentum, mean reversion
 │   ├── analytics/           # Risk metrics (metrics.py) and risk report assembly (risk.py)
 │   ├── ml/                  # Features, datasets, training, evaluation, inference
-│   ├── llm/                 # Copilot tools, prompts, tool-calling loop
+│   ├── llm/                 # Copilot tools, prompts, tool-calling loop, provider presets, research memory (rag.py)
 │   ├── tests/               # pytest suite (features, backtesting, metrics, ML, tracking, copilot, API, cache/limits)
 │   ├── requirements.txt     # Deployed dependencies (pinned)
 │   ├── requirements-dev.txt # + test tools
@@ -68,7 +70,7 @@ Algo-Trade-Simulator/
 │       ├── pages/           # One module per route
 │       └── components/      # ui/ primitives, charts/, layout/ shell, copilot/ drawer
 ├── deploy/nginx.conf        # Frontend container: static files + /api proxy
-├── scripts/                 # Maintenance scripts (deployed bundle size check)
+├── scripts/                 # Deployed bundle size check, local stand-in for the HF inference API
 ├── .github/workflows/       # CI
 ├── Dockerfile               # Backend image
 ├── Dockerfile.client        # Frontend image
@@ -142,7 +144,7 @@ The copilot works with any OpenAI-compatible chat API that supports tool calling
 
 | Provider | Cost | Setup | Default model |
 |---|---|---|---|
-| `groq` | Free tier, no card | Create a key at console.groq.com → `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
+| `groq` | Free tier, no card | Create a key at console.groq.com → `GROQ_API_KEY` | `openai/gpt-oss-120b` (falls back to `openai/gpt-oss-20b`) |
 | `openrouter` | Free `:free` models | Create a key at openrouter.ai → `OPENROUTER_API_KEY` | `meta-llama/llama-3.3-70b-instruct:free` |
 | `huggingface` | Small free monthly credits | Access token from huggingface.co → `HF_TOKEN`, plus `LLM_PROVIDER=huggingface` | `Qwen/Qwen2.5-72B-Instruct` |
 | `ollama` | Free, fully local, open source | Install Ollama, `ollama pull qwen2.5:7b`, set `LLM_PROVIDER=ollama` (local development only) | `qwen2.5:7b` |
@@ -185,6 +187,33 @@ Serverless and multi-instance hosting don't share process memory, so the market-
 | `UPSTASH_REDIS_REST_TOKEN` | REST token (or `KV_REST_API_TOKEN`) | unset |
 
 If Redis is unreachable, requests still succeed: the cache is skipped and limits fail open, with a warning in the log.
+
+### When you want research memory (sentiment and semantic search)
+
+Sentiment and note search use the hosted Hugging Face inference service. Create a free **read** access token at huggingface.co → Settings → Access Tokens and add it to `backend/.env`:
+
+| Variable | Description | Default |
+|---|---|---|
+| `HF_TOKEN` | Hugging Face access token (read) | unset (sentiment/search return 503 with a hint; notes still save) |
+| `SENTIMENT_MODEL` | Text-classification model | `ProsusAI/finbert` |
+| `EMBEDDING_MODEL` | Sentence-embedding model | `sentence-transformers/all-MiniLM-L6-v2` |
+| `NLP_PROVIDER` | `hf-api`, or `local` to run the models in-process (needs `requirements-local-ml.txt`; local development only) | `hf-api` |
+| `HF_INFERENCE_URL` | Inference endpoint base | `https://router.huggingface.co/hf-inference/models` |
+| `ATLAS_VECTOR_INDEX` | Name of an Atlas Vector Search index on `research_notes` (optional) | unset (exact NumPy scan) |
+
+Hosted models sleep when idle: the first request can take a few seconds, and if a model is still loading the API answers 503 with `Retry-After`. Changing `EMBEDDING_MODEL` is safe — notes embedded with another model are re-embedded on the next search.
+
+Optional, MongoDB Atlas only: create a Vector Search index on the `research_notes` collection with this definition and set `ATLAS_VECTOR_INDEX` to its name (without it, search is an exact scan over your notes, which is fast for personal corpora):
+
+```json
+{
+  "fields": [
+    { "type": "vector", "path": "embedding", "numDimensions": 384, "similarity": "cosine" },
+    { "type": "filter", "path": "userId" },
+    { "type": "filter", "path": "embeddingModel" }
+  ]
+}
+```
 
 ### When you want experiment tracking (MLflow)
 
@@ -240,7 +269,11 @@ All routes are served under the `/api` prefix. Authenticated routes expect `Auth
 | `GET /api/ml/models` / `GET /api/ml/models/{id}` | Model registry list / full report | ✓ |
 | `POST /api/ml/predict` | Live signal from a registered model (by id, or latest for a symbol) | ✓ |
 | `GET /api/status` | Operational snapshot: version, store type, market-data source health, copilot provider and model, experiment tracking, rate limits and whether they are shared (no secrets) | ✓ |
-| `POST /api/copilot/chat` | Copilot conversation, streamed as Server-Sent Events (tool start/end, reply, saved actions) | ✓ |
+| `POST /api/research/sentiment` | Bullish / bearish / neutral with confidence for up to 20 texts | ✓ |
+| `POST /api/research/notes` / `GET /api/research/notes` | Save a note (or a backtest/model summary via `kind` + `refId`; idempotent) / list your notes | ✓ |
+| `DELETE /api/research/notes/{id}` | Delete a note | ✓ |
+| `POST /api/research/rag/query` | Your notes ranked by semantic similarity to a query | ✓ |
+| `POST /api/copilot/chat` | Copilot conversation, streamed as Server-Sent Events (notes consulted, tool start/end, reply, saved actions) | ✓ |
 | `POST /api/copilot/action` | Run one structured action (`run_backtest`, `train_model`, `create_simulation`) without free-text parsing | ✓ |
 | `POST /api/chat` | Non-streaming copilot reply (compatibility alias) | ✓ |
 | `GET /api/health` | Liveness check | — |
@@ -258,11 +291,10 @@ Development proceeds in phases; each phase ships working, verifiable functionali
 | 4 | Feature engineering | OHLCV → indicator feature matrices (RSI, MACD, Bollinger, momentum), leakage-free labels and time-series splits | Done |
 | 5 | ML strategies | Directional model training (scikit-learn), time-aware evaluation, model registry with database-backed artifacts, ML signals through the backtester | Done |
 | 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Done |
-| 7 | NLP research memory | Financial sentiment analysis and embedding-based retrieval over strategy notes and backtest reports (Hugging Face) | Planned |
+| 7 | NLP research memory | FinBERT sentiment, embedding-based retrieval over notes and backtest/model summaries, copilot answers that cite your notes (hosted Hugging Face inference) | Done |
 | 8 | Production hardening | Route modules, API + unit test suite, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
 | 9 | Cloud deployment | Single-origin deployment on Vercel — static frontend + FastAPI serverless function, MongoDB Atlas, managed Redis | Planned |
 
-Planned additional endpoints as phases land (all under `/api`): `POST /research/sentiment`, `POST /research/notes`, `POST /research/rag/query`.
 
 ## Methodology notes
 
@@ -279,6 +311,7 @@ Strategy and model evaluation in this project follows standard quant-research di
 - `npm run build` — production frontend build.
 - `python -m py_compile backend/main.py` — quick backend syntax check.
 - `python backend/test.py` — MongoDB connectivity check.
+- `python scripts/fake_hf_inference.py` — local stand-in for the Hugging Face inference API (keyword-based, not a real model) for offline development; run the backend with `HF_TOKEN=local HF_INFERENCE_URL=http://127.0.0.1:8765`.
 - `python scripts/check_bundle_size.py` — installed size of the deployed Python dependencies (warns above 250 MB, fails above 500 MB).
 - Keep this README in sync when adding scripts, endpoints, or environment variables.
 

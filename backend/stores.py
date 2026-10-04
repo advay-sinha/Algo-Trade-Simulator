@@ -1,5 +1,6 @@
 """Persistence: an in-memory store for development/tests and a MongoDB store for production.
-Both implement the same interface (users, sessions, simulations, training, backtests, models)."""
+Both implement the same interface (users, sessions, simulations, training, backtests, models,
+research notes)."""
 
 from __future__ import annotations
 
@@ -79,6 +80,16 @@ def model_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+NOTE_VECTOR_FIELDS = ("id", "title", "body", "kind", "refId", "symbol", "createdAt", "embedding", "embeddingModel")
+
+
+def public_note(record: Dict[str, Any]) -> Dict[str, Any]:
+    """A note without its embedding (vectors never leave the server)."""
+    note = {key: value for key, value in record.items() if key not in ("embedding", "userId", "_id")}
+    note["indexed"] = bool(record.get("embedding"))
+    return note
+
+
 def backtest_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     summary = {key: record.get(key) for key in BACKTEST_SUMMARY_FIELDS}
     metrics = (record.get("risk") or {}).get("metrics") or {}
@@ -97,6 +108,7 @@ class InMemoryStore:
         self.backtests: Dict[str, Dict[str, Any]] = {}
         self.models: Dict[str, Dict[str, Any]] = {}
         self.artifacts: Dict[str, bytes] = {}
+        self.notes: Dict[str, Dict[str, Any]] = {}
 
     async def create_user(self, email: str, name: str, password: str) -> Dict[str, Any]:
         async with self.lock:
@@ -272,6 +284,47 @@ class InMemoryStore:
         async with self.lock:
             return self.artifacts.get(record["artifactId"])
 
+    async def add_note(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        async with self.lock:
+            stored = record | {"id": uuid.uuid4().hex, "userId": user_id, "createdAt": now().isoformat()}
+            self.notes[stored["id"]] = stored
+            return stored
+
+    async def get_note(self, user_id: str, note_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.notes.get(note_id)
+            return record if record and record["userId"] == user_id else None
+
+    async def find_note(self, user_id: str, kind: str, ref_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            return next((r for r in self.notes.values() if r["userId"] == user_id and r.get("kind") == kind and r.get("refId") == ref_id), None)
+
+    async def list_notes(self, user_id: str, kind: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [r for r in self.notes.values() if r["userId"] == user_id and (kind is None or r.get("kind") == kind)]
+        records.sort(key=lambda r: r["createdAt"], reverse=True)
+        return records[:limit]
+
+    async def delete_note(self, user_id: str, note_id: str) -> bool:
+        async with self.lock:
+            record = self.notes.get(note_id)
+            if not record or record["userId"] != user_id:
+                return False
+            del self.notes[note_id]
+            return True
+
+    async def note_vectors(self, user_id: str, limit: int = 2000) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [r for r in self.notes.values() if r["userId"] == user_id]
+        records.sort(key=lambda r: r["createdAt"], reverse=True)
+        return [{key: r.get(key) for key in NOTE_VECTOR_FIELDS} for r in records[:limit]]
+
+    async def set_note_embedding(self, user_id: str, note_id: str, embedding: List[float], model: str) -> None:
+        async with self.lock:
+            record = self.notes.get(note_id)
+            if record and record["userId"] == user_id:
+                record["embedding"], record["embeddingModel"] = embedding, model
+
 
 class MongoStore:
     def __init__(self, dsn: str, db_name: str) -> None:
@@ -291,6 +344,7 @@ class MongoStore:
         self.training = self.db["training"]
         self.backtests = self.db["backtests"]
         self.models = self.db["models"]
+        self.notes = self.db["research_notes"]
         # Model artifacts live in GridFS (never on local disk: serverless filesystems are ephemeral).
         self.artifacts = AsyncIOMotorGridFSBucket(self.db, bucket_name="model_artifacts") if AsyncIOMotorGridFSBucket else None
         self._indexes_ready = False
@@ -306,6 +360,8 @@ class MongoStore:
         await self.training.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1)], unique=True)
         await self.backtests.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
         await self.models.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1), ("trainedAt", DESCENDING or -1)])
+        await self.notes.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
+        await self.notes.create_index([("userId", ASCENDING or 1), ("kind", ASCENDING or 1), ("refId", ASCENDING or 1)])
         # Sessions created before token hashing stored the raw token (as _id and/or a token
         # field). Those are replayable if leaked, so invalidate them; users simply sign in again.
         legacy = await self.sessions.delete_many(
@@ -579,6 +635,59 @@ class MongoStore:
             return None
         stream = await self.artifacts.open_download_stream(record["_artifactObjectId"])
         return await stream.read()
+
+    @staticmethod
+    def _format_note(document: Dict[str, Any]) -> Dict[str, Any]:
+        record = {key: value for key, value in document.items() if key != "_id"}
+        record["id"] = str(document["_id"])
+        return record
+
+    async def add_note(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        document = record | {"_id": uuid.uuid4().hex, "userId": user_id, "createdAt": now().isoformat()}
+        await self.notes.insert_one(document)
+        return self._format_note(document)
+
+    async def get_note(self, user_id: str, note_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.notes.find_one({"_id": note_id, "userId": user_id})
+        return self._format_note(document) if document else None
+
+    async def find_note(self, user_id: str, kind: str, ref_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.notes.find_one({"userId": user_id, "kind": kind, "refId": ref_id})
+        return self._format_note(document) if document else None
+
+    async def list_notes(self, user_id: str, kind: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        query: Dict[str, Any] = {"userId": user_id}
+        if kind:
+            query["kind"] = kind
+        cursor = self.notes.find(query, {"embedding": 0}).sort("createdAt", DESCENDING or -1).limit(limit)
+        # The projection drops the vector; keep a truthy marker so public_note still reports "indexed".
+        return [self._format_note(document) | {"embedding": bool(document.get("embeddingModel"))} async for document in cursor]
+
+    async def delete_note(self, user_id: str, note_id: str) -> bool:
+        result = await self.notes.delete_one({"_id": note_id, "userId": user_id})
+        return result.deleted_count == 1
+
+    async def note_vectors(self, user_id: str, limit: int = 2000) -> List[Dict[str, Any]]:
+        projection = {key: 1 for key in NOTE_VECTOR_FIELDS if key != "id"}
+        cursor = self.notes.find({"userId": user_id}, projection).sort("createdAt", DESCENDING or -1).limit(limit)
+        return [self._format_note(document) async for document in cursor]
+
+    async def set_note_embedding(self, user_id: str, note_id: str, embedding: List[float], model: str) -> None:
+        await self.notes.update_one({"_id": note_id, "userId": user_id}, {"$set": {"embedding": embedding, "embeddingModel": model}})
+
+    async def vector_search_notes(self, user_id: str, vector: List[float], k: int, model: str, index: str) -> List[Dict[str, Any]]:
+        """Atlas Vector Search filtered to this user and embedding model. Atlas reports
+        (1 + cosine) / 2 for cosine indexes; converted back to cosine similarity here."""
+        pipeline = [
+            {"$vectorSearch": {"index": index, "path": "embedding", "queryVector": vector, "numCandidates": max(50, k * 10), "limit": k, "filter": {"userId": user_id, "embeddingModel": model}}},
+            {"$project": {"embedding": 0, "score": {"$meta": "vectorSearchScore"}}},
+        ]
+        results = []
+        async for document in self.notes.aggregate(pipeline):
+            record = self._format_note(document)
+            record["score"] = 2 * float(record.pop("score", 0.5)) - 1
+            results.append(record)
+        return results
 
 
 Store = Union[InMemoryStore, MongoStore]

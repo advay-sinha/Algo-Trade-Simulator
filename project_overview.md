@@ -49,6 +49,7 @@ A full-stack quantitative research and trading simulation platform. Users resear
 | Lab trainer | `/analytics/train` runs a zero-cost SMA crossover backtest over 6 months (in-sample) and reports real return, CAGR, drawdown, Sharpe, win rate; naive 5-day-momentum live signal; training-run listing |
 | Market provenance | Every quote, chart, search result, and sparkline carries `source` (`live` / `offline` / `synthetic`); fallbacks are gated by `ALLOW_OFFLINE_MARKET_DATA`; `/api/status` reports the last observed source per server instance |
 | Copilot | `llm/tools.py` (10 LangChain `StructuredTool`s built per request with the user's id/store in a closure), `llm/langchain_agent.py` (tool-calling loop, 5-call budget, every call answered), `llm/prompts.py`, `llm/providers.py` (OpenAI-compatible presets: Groq, OpenRouter, Hugging Face, Ollama, OpenAI), `services/copilot_service.py` (model fallbacks on rate limits, SSE event stream, provider-error masking); shared action code in `services/research_actions.py` so REST and tools use one path |
+| Research NLP | `services/hf_inference.py` (hosted Hugging Face inference over REST — no client library; cold-start retry within a 10 s budget, then 503 + Retry-After; optional in-process `local` provider), `services/sentiment_service.py` (label mapping to bullish/bearish/neutral), `llm/rag.py` (note creation incl. backtest/model summaries, embeddings on the documents, stale re-embedding on query, NumPy cosine scan or Atlas `$vectorSearch` filtered by user, copilot context + citations) |
 | Simulations | Per-user CRUD (create / list / patch status+notes / delete) |
 
 
@@ -92,7 +93,7 @@ Routes are code-split; the charting library loads only on pages with charts. All
 
 | `models` | `_id`, `userId`, `symbol`, `modelType`, `hyperparams`, `featureConfig`, `featureNames`, `label`, `range`, `split`, `labelDistribution`, `classification`, `strategy` (test-window backtest), `artifactId` (GridFS `model_artifacts` bucket), `artifactBytes`, `tracking`, `trainedAt` |
 
-Planned collections as the roadmap lands: research notes (user-scoped), vector-index doc mappings.
+| `research_notes` | `_id`, `userId`, `kind` (note / backtest / model), `title`, `body`, `refId`, `symbol`, `tags`, `sentiment` {label, confidence, scores}, `embedding` (float list), `embeddingModel`, `createdAt` — indexed on (userId, createdAt) and (userId, kind, refId) |
 
 ## 5. API surface
 
@@ -116,14 +117,14 @@ All routes are prefixed with `/api`.
 | `POST /ml/train`, `GET /ml/models`, `GET /ml/models/{id}`, `POST /ml/predict` | Train + register, list, inspect, live signal | ✓ |
 | `GET /analytics/strategies` | Strategy catalog | — |
 | `POST /analytics/train`, `POST /analytics/predict` | SMA training, momentum signal | ✓ |
-| `POST /copilot/chat` | Copilot conversation streamed as Server-Sent Events | ✓ |
+| `POST /research/sentiment` | FinBERT sentiment for up to 20 texts | ✓ |
+| `POST /research/notes`, `GET /research/notes`, `DELETE /research/notes/{id}` | Research memory: save (notes, or backtest/model summaries), list, delete | ✓ |
+| `POST /research/rag/query` | Semantic search over your notes (cosine similarity) | ✓ |
+| `POST /copilot/chat` | Copilot conversation streamed as Server-Sent Events (cites retrieved notes) | ✓ |
 | `POST /copilot/action` | Structured action execution (backtest / train / simulation) | ✓ |
 | `POST /chat` | Non-streaming copilot alias | ✓ |
 | `GET /health` | Liveness | — |
 
-### Planned (per roadmap)
-
-`POST /research/sentiment`, `POST /research/notes`, `POST /research/rag/query`.
 
 ## 6. Roadmap
 
@@ -136,7 +137,7 @@ All routes are prefixed with `/api`.
 | 4 | Feature engineering — OHLCV → indicator matrices, leakage-free labels, time-series splits | Done |
 | 5 | ML strategies — directional models, time-aware evaluation, model registry (artifacts in GridFS), ML signals through the backtester | Done |
 | 6 | Copilot 2.0 — tool-calling assistant that runs backtests, trains models, explains results | Done |
-| 7 | NLP research memory — financial sentiment, embeddings stored in MongoDB with vector retrieval over notes/reports | Planned |
+| 7 | NLP research memory — FinBERT sentiment, embeddings stored on MongoDB documents, user-scoped retrieval (NumPy or Atlas Vector Search), copilot citations | Done |
 | 8 | Production hardening — route modules, API + unit tests, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
 | 9 | Cloud deployment — Vercel (static frontend + FastAPI serverless function, same origin), MongoDB Atlas, managed Redis | Planned |
 
@@ -159,6 +160,7 @@ No `.env` file is required to start; defaults run the whole app in development m
 | Experiment tracking | `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_EXPERIMENT_NAME` |
 | Storage | `MONGO_URL` (or `MONGODB_URI`/`MONGO_URI`), `MONGODB_DB`, `USE_IN_MEMORY_DB`, `STRICT_DB`, `MONGO_MAX_POOL_SIZE` |
 | Copilot | `LLM_PROVIDER`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `HF_TOKEN`, `OPENAI_API_KEY`, `LLM_MODEL`, `LLM_MODEL_FALLBACKS`, `LLM_BASE_URL`, `LLM_API_KEY`, `OLLAMA_BASE_URL`, `OPENAI_TEMPERATURE` |
+| Research NLP | `HF_TOKEN`, `SENTIMENT_MODEL`, `EMBEDDING_MODEL`, `NLP_PROVIDER`, `HF_INFERENCE_URL`, `ATLAS_VECTOR_INDEX` |
 | Shared cache / limits | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL` / `KV_REST_API_TOKEN`) |
 | Logging | `LOG_FORMAT`, `LOG_LEVEL` |
 | General | `CORS_ORIGINS`, `FRONTEND_ORIGIN`, `SESSION_DURATION_DAYS`, `ENABLE_DEV_ENDPOINTS`, `YAHOO_USER_AGENT` |
@@ -187,6 +189,7 @@ No `.env` file is required to start; defaults run the whole app in development m
 - **Predictive edge is small** — on liquid large caps, next-day direction models typically land near the majority-class baseline; the interface reports this plainly rather than overstating results.
 - **Fallback data during outages** — when Yahoo is unreachable, quotes/charts/search fall back to reference or synthetic values. They are always flagged in the payload and badged in the interface, but they are not real prices.
 - **Store fallback outside strict mode** — without `STRICT_DB`, an unreachable MongoDB makes the server log a warning and run in-memory; data appears to save but vanishes on restart. Strict mode is on by default when deployed to Vercel.
+- **Sentiment reads wording, not markets** — FinBERT scores the tone of text; it is not a return forecast, and generated backtest/model summaries are not scored.
 - **Long/flat only** — backtests hold either a full long position or cash; no shorting, leverage, or position scaling yet.
 - **No browser end-to-end tests in CI** — CI runs the backend unit and API tests plus the frontend type check and build; interface checks are run manually.
 - **Rate limits are per process without Redis** — when Upstash isn't configured, each server instance counts separately; with Redis unreachable, limits fail open.

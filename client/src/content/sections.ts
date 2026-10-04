@@ -164,9 +164,9 @@ export const SECTIONS = {
     title: "Research history",
     navLabel: "Research records",
     summary:
-      "Every backtest, simulation, and training run you've saved, newest first. Search by symbol or strategy and filter by type.",
+      "Every backtest, model, simulation, training run, and research note you've saved, newest first. Search by symbol, strategy, or title and filter by type.",
     howItWorks: [
-      "Simulations and training runs are listed together.",
+      "Backtests, models, simulations, training runs, and research notes are listed together.",
       "Search matches symbol and strategy; filters narrow by type and status.",
       "Trained models are listed too, with their test results.",
     ],
@@ -219,6 +219,26 @@ export const SECTIONS = {
     ],
     features: [],
     status: "live",
+  },
+  research: {
+    id: "research",
+    route: "/research",
+    title: "Research memory",
+    navLabel: "Research memory",
+    summary:
+      "Keep your research findings in one searchable place. Save notes or summaries of backtests and models, find them again by meaning rather than exact words, and score headlines as bullish, bearish, or neutral with a financial language model. The copilot reads the notes most relevant to each question and cites them.",
+    howItWorks: [
+      "Each note is turned into an embedding when it's saved; notes you write are also scored for sentiment.",
+      "Searching compares your question's embedding with your notes only — never anyone else's.",
+      "The copilot receives your closest notes as context and cites the ones it used.",
+    ],
+    features: [
+      { id: "private", label: "Private to you", hoverText: "Every search filters by your account first. Your notes never reach another user's results or copilot context." },
+      { id: "hosted", label: "Hosted models", hoverText: "Sentiment uses FinBERT and search uses a small sentence-embedding model, both run through the Hugging Face inference service. Nothing large is installed on the server." },
+      { id: "unindexed", label: "Saved even when offline", hoverText: "If the language service is unavailable, notes still save and are indexed automatically on your next search." },
+    ],
+    status: "live",
+    phase: 7,
   },
 } satisfies Record<string, SectionInfo>;
 
@@ -365,7 +385,7 @@ export const ENGINES: EngineInfo[] = [
     purpose: "Runs research tools for you and explains the results.",
     output: "Answers, explanations, actions",
     summary:
-      "A tool-calling research assistant available from every page. It runs backtests, trains and evaluates models, reads your saved reports, and creates simulations — through the same validated code paths as the interface — and explains what it found. Every saved action is listed under its reply.",
+      "A tool-calling research assistant available from every page. It runs backtests, trains and evaluates models, reads your saved reports, searches your research notes, and creates simulations — through the same validated code paths as the interface — and explains what it found. Notes it relied on are cited, and every saved action is listed under its reply.",
     howItWorks: [
       "Open the copilot from the top bar on any page.",
       "It picks tools (backtest, model training, reports, quotes…) and you watch each one run.",
@@ -374,7 +394,7 @@ export const ENGINES: EngineInfo[] = [
     features: [
       { id: "guardrails", label: "Guardrails", hoverText: "Tools run as you and only see your data, inputs are validated like the forms, at most 5 tool calls per message, and every saved action is echoed back." },
       { id: "injection", label: "Prompt-injection posture", hoverText: "It never fetches URLs or files, and treats tool results and quoted text as data, not instructions." },
-      { id: "config", label: "Model provider", hoverText: "Runs on any OpenAI-compatible provider, including free ones: Groq (hosted open-weight Llama/Qwen models) or Ollama (fully local, open source). Without one, it says it isn't configured." },
+      { id: "config", label: "Model provider", hoverText: "Runs on any OpenAI-compatible provider, including free ones: Groq (hosted open-weight models such as gpt-oss and Qwen) or Ollama (fully local, open source). Without one, it says it isn't configured." },
     ],
     terms: ["signal"],
     status: "live",
@@ -384,7 +404,7 @@ export const ENGINES: EngineInfo[] = [
     id: "research",
     route: "/engines/research",
     title: "NLP research engine",
-    navLabel: "Research memory",
+    navLabel: "NLP research",
     purpose: "Scores text sentiment and remembers your research notes.",
     output: "Sentiment scores, retrieved notes",
     summary:
@@ -396,10 +416,11 @@ export const ENGINES: EngineInfo[] = [
     ],
     features: [
       { id: "scoped", label: "Private to you", hoverText: "Retrieval is scoped to your account — your notes never reach another user's context." },
+      { id: "models", label: "Models", hoverText: "FinBERT (ProsusAI/finbert) for sentiment and all-MiniLM-L6-v2 for embeddings, via the Hugging Face inference service." },
+      { id: "cold", label: "Cold starts", hoverText: "Hosted models sleep when idle. The first request may take a few seconds; if the model is still loading you'll be asked to retry shortly." },
     ],
-    terms: ["sentiment", "rag"],
-    planned: ["Sentiment analyzer", "Research notes with semantic search", "Copilot answers that cite your notes"],
-    status: "planned",
+    terms: ["sentiment", "rag", "similarity", "embedding"],
+    status: "live",
     phase: 7,
   },
 ];
