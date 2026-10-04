@@ -76,6 +76,7 @@ Algo-Trade-Simulator/
 ├── Dockerfile.client        # Frontend image
 ├── docker-compose.yml       # Local stack: frontend + backend + MongoDB
 ├── package.json             # Frontend scripts & dependencies
+├── vercel.json              # Frontend hosting: build, /api rewrite to the API, SPA fallback, security headers
 ├── vite.config.ts
 ├── tsconfig.json
 ├── project_overview.md      # Architecture, API surface, data model, roadmap detail
@@ -133,7 +134,7 @@ Create `backend/.env` (or export the variables) once you have a MongoDB instance
 | `MONGODB_DB` | Database name | `algo-trade-simulator` |
 | `USE_IN_MEMORY_DB` | Skip MongoDB entirely; ephemeral storage | `false` |
 
-| `STRICT_DB` | Fail requests with 503 instead of falling back to in-memory storage when MongoDB is unavailable | `false` locally, `true` on Vercel |
+| `STRICT_DB` | Fail requests with 503 instead of falling back to in-memory storage when MongoDB is unavailable | `false` locally, `true` when hosted |
 | `MONGO_MAX_POOL_SIZE` | Connection pool size per process | `5` |
 
 Verify connectivity with `python scripts/check_connections.py --mongo`. The database connection is created on the first request. Without `STRICT_DB`, an unreachable MongoDB logs a warning and the server falls back to the in-memory store — check the log to confirm which store is active.
@@ -173,7 +174,9 @@ Without a provider the chat replies with a "not configured" notice; every other 
 | `MARKET_RATE_LIMIT_PER_MINUTE` | Watchlist / quote requests allowed per client per minute | `60` |
 | `ALLOW_OFFLINE_MARKET_DATA` | Serve clearly flagged fallback quotes/charts when the provider is unreachable; `false` returns an error instead | `true` |
 | `RATE_LIMIT_STORAGE_URI` | `memory://` forces per-process limits; leave unset to use Upstash automatically when configured | unset (auto) |
-| `LOG_FORMAT` | `json` (one object per line) or `text` | `json` on Vercel, `text` locally |
+| `LOG_FORMAT` | `json` (one object per line) or `text` | `json` when hosted, `text` locally |
+| `APP_ENV` | `production` on hosted deployments (set by the Docker image): strict database mode, JSON logs, proxy-aware client IPs, development routes off | unset |
+| `TRUST_PROXY_HEADERS` | Take the client IP from `X-Forwarded-For` (only behind a trusted proxy) | `true` when hosted |
 | `LOG_LEVEL` | Backend log level | `INFO` |
 | `YAHOO_USER_AGENT` | User-Agent for Yahoo Finance requests | preset |
 
@@ -293,7 +296,7 @@ Development proceeds in phases; each phase ships working, verifiable functionali
 | 6 | Copilot 2.0 | Tool-calling research assistant (LangChain) that runs backtests, trains models, explains results, and creates simulations from natural language | Done |
 | 7 | NLP research memory | FinBERT sentiment, embedding-based retrieval over notes and backtest/model summaries, copilot answers that cite your notes (hosted Hugging Face inference) | Done |
 | 8 | Production hardening | Route modules, API + unit test suite, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
-| 9 | Cloud deployment | Single-origin deployment on Vercel — static frontend + FastAPI serverless function, MongoDB Atlas, managed Redis | Planned |
+| 9 | Cloud deployment | Frontend on Vercel, API container on Koyeb behind a same-origin `/api` rewrite, MongoDB Atlas, deployment smoke test | Ready to deploy |
 
 
 ## Methodology notes
@@ -305,11 +308,71 @@ Strategy and model evaluation in this project follows standard quant-research di
 - **Risk-adjusted reporting** — strategies are judged against buy-and-hold with Sharpe/Sortino/drawdown, not raw prediction accuracy.
 - **Cost realism** — backtests apply transaction costs and slippage on every fill.
 
+## Deployment
+
+```
+Browser ──► Vercel (static frontend, dist/) ──/api/* rewrite──► Koyeb (Docker: FastAPI + uvicorn)
+                                                                 ├── MongoDB Atlas (data, model artifacts, note embeddings)
+                                                                 ├── Hugging Face inference (sentiment, embeddings)
+                                                                 ├── Groq or another LLM provider (copilot)
+                                                                 └── DagsHub MLflow (optional experiment tracking)
+```
+
+The browser only ever talks to the Vercel domain: Vercel serves the frontend and forwards `/api/*` to the API on Koyeb, so there is one origin, no CORS configuration, and no API URL baked into the frontend build.
+
+### 1. MongoDB Atlas
+
+- Network Access → add `0.0.0.0/0` (free container instances have no fixed outbound IP), and rely on a strong password.
+- Database Access → a dedicated user with `readWrite` on one database only.
+- Check the connection string locally: `python scripts/check_connections.py --mongo`.
+
+### 2. API on Koyeb
+
+1. Koyeb → Create Web Service → GitHub → this repository, branch `main`.
+2. Builder: **Dockerfile** (repository root). Instance: Free. Pick the region closest to your Atlas cluster.
+3. Ports: `8000`, protocol HTTP, public route `/`. Health check: HTTP, path `/api/health`.
+4. Environment variables (store the keys as Koyeb Secrets):
+
+   | Variable | Value |
+   |---|---|
+   | `MONGO_URL` | Atlas connection string |
+   | `MONGODB_DB` | database name, e.g. `algo-trade-simulator` |
+   | `GROQ_API_KEY` | copilot (or another provider from the copilot table) |
+   | `HF_TOKEN` | research memory and sentiment |
+   | `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD` | optional, DagsHub tracking |
+   | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | optional; only needed with more than one instance |
+
+   The image already sets `APP_ENV=production`, which turns on strict database mode (no silent in-memory fallback), JSON logs, proxy-aware client IPs for rate limiting, and keeps the development sign-in route disabled. Never set `ENABLE_DEV_ENDPOINTS` or `USE_IN_MEMORY_DB` here.
+5. Deploy, then open `https://<service>.koyeb.app/api/health`.
+
+### 3. Frontend on Vercel
+
+1. Point the `/api` rewrite in `vercel.json` at the Koyeb URL (first entry in `rewrites`):
+   `{ "source": "/api/:path*", "destination": "https://<service>.koyeb.app/api/:path*" }`
+2. Vercel → Add New Project → import this repository. `vercel.json` sets the Vite build (`npm run build` → `dist/`), the SPA fallback for deep links, and security headers. No environment variables are needed.
+
+### 4. Verify
+
+```bash
+python scripts/smoke_deploy.py https://<project>.vercel.app
+```
+
+It wakes the instance, signs up a throwaway account, and exercises auth, simulations, market data (reporting whether quotes are live), a backtest and its risk report, research memory and the copilot when configured, and logout. It cleans up the simulation and note it creates.
+
+### Operating notes
+
+- **Cold starts**: the free Koyeb instance sleeps when idle; the first request after a pause waits for it to start.
+- **CPU**: the free instance has a fraction of one CPU. Model training (a few CPU-seconds locally) and the copilot's first message after a start can take up to about a minute.
+- **Market data**: Yahoo Finance may rate-limit cloud IP ranges. Quotes then fall back to clearly flagged offline values, and the interface badges them.
+- **Rollback**: redeploy a previous deployment from the Koyeb service page; Vercel offers instant rollback to any earlier frontend deployment.
+- **Alternative wiring**: to call the API directly instead of through the rewrite, set `VITE_API_BASE_URL=https://<service>.koyeb.app/api` in Vercel, `CORS_ORIGINS=https://<project>.vercel.app` on Koyeb, and add the Koyeb origin to `connect-src` in the `vercel.json` Content-Security-Policy.
+
 ## Development
 
 - `npm run check` — TypeScript type check (run before committing frontend changes).
 - `npm run build` — production frontend build.
 - `python -m py_compile backend/main.py` — quick backend syntax check.
+- `python scripts/smoke_deploy.py <url>` — end-to-end smoke test of a deployed instance (see Deployment).
 - `python scripts/check_connections.py` — checks the Hugging Face token (plus the sentiment and embedding models) and the MongoDB connection with the backend's settings; `--hf` / `--mongo` for one, `--no-inference` to skip model calls. Prints PASS/FAIL with a fix hint, never secrets; exit code 1 on failure. `python backend/test.py` runs the MongoDB part only.
 - `python scripts/fake_hf_inference.py` — local stand-in for the Hugging Face inference API (keyword-based, not a real model) for offline development; run the backend with `HF_TOKEN=local HF_INFERENCE_URL=http://127.0.0.1:8765`.
 - `python scripts/check_bundle_size.py` — installed size of the deployed Python dependencies (warns above 250 MB, fails above 500 MB).
@@ -330,7 +393,7 @@ The suite covers feature leakage, the backtesting engine, risk metrics, ML train
 
 ### Continuous integration
 
-Every push and pull request to `main` runs three jobs: backend tests (Python 3.12), frontend type check and build (Node 20), and the deployed-bundle size check.
+Every push and pull request to `main` runs four jobs: backend tests (Python 3.12), frontend type check and build (Node 20), the deployed-bundle size check, and a build of the backend Docker image that is started and smoke-tested (health, request ids, sign-up, production settings, development routes closed).
 
 ### Docker (optional)
 

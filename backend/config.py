@@ -23,10 +23,14 @@ APP_VERSION = "0.4.0"
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 LOCAL_DEV_ORIGIN = "http://localhost:5173"
 
-# Vercel sets VERCEL=1 for builds and functions; VERCEL_ENV is production / preview / development.
+# Hosting detection. Vercel sets VERCEL=1 and VERCEL_ENV (production / preview / development);
+# container hosts (Koyeb, Render, Docker) get APP_ENV=production from the Dockerfile.
 ON_VERCEL = bool(os.getenv("VERCEL"))
 VERCEL_ENV = os.getenv("VERCEL_ENV", "")
-IS_PRODUCTION = VERCEL_ENV == "production"
+APP_ENV = os.getenv("APP_ENV", "").strip().lower()
+IS_PRODUCTION = VERCEL_ENV == "production" or APP_ENV == "production"
+# Managed hosting: behind a proxy, logs collected from stdout, no local-development conveniences.
+HOSTED = ON_VERCEL or IS_PRODUCTION
 
 
 def env_flag(name: str, default: str = "false") -> bool:
@@ -53,9 +57,11 @@ class Settings(BaseModel):
     session_duration_days: int = Field(default_factory=lambda: env_int("SESSION_DURATION_DAYS", 7))
     enable_dev_endpoints: bool = Field(default_factory=lambda: env_flag("ENABLE_DEV_ENDPOINTS"))
     use_in_memory_db: bool = Field(default_factory=lambda: env_flag("USE_IN_MEMORY_DB", "false"))
-    # Serverless instances don't share memory, so a silent in-memory fallback would lose data;
-    # strict mode is therefore the default whenever the app runs on Vercel.
-    strict_db: bool = Field(default_factory=lambda: env_flag("STRICT_DB", "true" if ON_VERCEL else "false"))
+    # Hosted instances restart and scale independently, so a silent in-memory fallback would lose
+    # data; strict mode is therefore the default whenever the app is hosted.
+    strict_db: bool = Field(default_factory=lambda: env_flag("STRICT_DB", "true" if HOSTED else "false"))
+    # Behind a proxy the socket peer is the proxy; trust X-Forwarded-For's first hop for client IPs.
+    trust_proxy_headers: bool = Field(default_factory=lambda: env_flag("TRUST_PROXY_HEADERS", "true" if HOSTED else "false"))
     mongo_url: Optional[str] = Field(default_factory=lambda: os.getenv("MONGO_URL"))
     mongodb_uri: Optional[str] = Field(default_factory=lambda: os.getenv("MONGODB_URI"))
     mongo_uri: Optional[str] = Field(default_factory=lambda: os.getenv("MONGO_URI"))
@@ -114,7 +120,7 @@ def mask_mongo_dsn(dsn: str) -> str:
 
 def allowed_cors_origins(config: Settings) -> List[str]:
     origins = list(config.cors_origins) or [config.frontend_origin]
-    if not ON_VERCEL and LOCAL_DEV_ORIGIN not in origins:
+    if not HOSTED and LOCAL_DEV_ORIGIN not in origins:
         origins.append(LOCAL_DEV_ORIGIN)
     # Credentials are allowed, so a wildcard origin is never acceptable.
     return [origin for origin in origins if origin and origin != "*"]

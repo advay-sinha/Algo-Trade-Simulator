@@ -14,7 +14,7 @@ from typing import Callable, Dict, Protocol, Tuple
 
 from fastapi import HTTPException, Request, status
 
-from backend.config import ON_VERCEL, settings
+from backend.config import HOSTED, settings
 from backend.services import upstash
 
 logger = logging.getLogger("algo_trade_backend.rate_limit")
@@ -72,8 +72,8 @@ def build_storage(uri: str) -> RateLimitStorage:
         return UpstashRateLimitStorage()
     if choice.startswith("upstash"):
         logger.warning("RATE_LIMIT_STORAGE_URI=upstash but Upstash credentials are missing; using per-process memory")
-    elif ON_VERCEL:
-        logger.warning("Rate limiting uses per-instance memory on serverless; limits are not shared across instances")
+    elif HOSTED:
+        logger.info("Rate limiting: per-instance memory (shared only with Upstash configured)")
     return MemoryRateLimitStorage()
 
 
@@ -91,9 +91,10 @@ def reset() -> None:
 
 
 def client_ip(request: Request) -> str:
-    # Behind Vercel's proxy the socket peer is the proxy; the first forwarded hop is the client.
-    # Only trust the header there — locally it could be spoofed freely.
-    if ON_VERCEL:
+    # Behind a hosting proxy (Vercel rewrite, Koyeb edge) the socket peer is the proxy and the first
+    # forwarded hop is the client. Trusted only when hosted (TRUST_PROXY_HEADERS) — locally it could
+    # be spoofed freely.
+    if settings.trust_proxy_headers:
         forwarded = request.headers.get("x-forwarded-for", "")
         first_hop = forwarded.split(",", 1)[0].strip()
         if first_hop:

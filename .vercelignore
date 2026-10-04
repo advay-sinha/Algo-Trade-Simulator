@@ -1,0 +1,14 @@
+# Vercel serves only the frontend build; the API runs on Koyeb.
+.venv
+backend
+scripts
+deploy
+Dockerfile
+Dockerfile.client
+docker-compose.yml
+**/__pycache__
+.claude
+CLAUDE.md
+AGENTS.md
+prompt.txt
+*.docx

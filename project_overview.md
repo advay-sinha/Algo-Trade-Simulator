@@ -139,17 +139,18 @@ All routes are prefixed with `/api`.
 | 6 | Copilot 2.0 — tool-calling assistant that runs backtests, trains models, explains results | Done |
 | 7 | NLP research memory — FinBERT sentiment, embeddings stored on MongoDB documents, user-scoped retrieval (NumPy or Atlas Vector Search), copilot citations | Done |
 | 8 | Production hardening — route modules, API + unit tests, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
-| 9 | Cloud deployment — Vercel (static frontend + FastAPI serverless function, same origin), MongoDB Atlas, managed Redis | Planned |
+| 9 | Cloud deployment — Vercel (static frontend) + Koyeb (API container) behind a same-origin `/api` rewrite, MongoDB Atlas, deployment smoke test | Ready to deploy |
 
 Build order rationale: make the finance core credible first (backtesting → risk), then ML workflows, then LLM/NLP as supporting intelligence layers, then packaging and deployment. The interactive console comes early so every engine ships its UI into one consistent design system.
 
-**Deployment target.** The platform is designed to run on Vercel as a single project: the Vite build is served as static files and the FastAPI app runs as a Python serverless function under `/api` on the same origin. This shapes the architecture from the first phase onward:
+**Deployment target.** The frontend is served by Vercel and the API runs as a Docker container on Koyeb; Vercel rewrites `/api/*` to Koyeb so the browser sees a single origin (no CORS, no API URL in the build). The API was kept serverless-compatible throughout (an earlier plan ran it as a Vercel function; the scientific Python stack, 318 MB installed on Linux, exceeds that limit), which keeps it stateless on a container host that sleeps and restarts:
 
 - No source-of-truth state in process memory — MongoDB (Atlas in production) for all persistence; the in-memory store is for local development and tests only.
 - No writes outside the temp directory — trained model artifacts live in MongoDB GridFS; research-note embeddings live on MongoDB documents.
-- Shared Redis for market-data caching and rate limiting across instances.
+- Shared Redis (Upstash) for market-data caching and rate limiting when more than one instance runs; a single free instance uses process memory.
 - Heavy ML/NLP models are served through hosted inference APIs rather than bundled into the function.
-- Every endpoint is sized to finish within a single function invocation.
+- Every endpoint finishes within a single request; no background jobs or websockets (the copilot streams over SSE).
+- Production mode (`APP_ENV=production`, set by the image): strict database mode, JSON logs, proxy-aware client IPs, development routes disabled.
 
 ## 7. Configuration
 
@@ -188,13 +189,14 @@ No `.env` file is required to start; defaults run the whole app in development m
 - **Lab results are in-sample** — the Lab's quick trainer measures a zero-cost backtest over the same window it describes; use Backtests (with costs and longer history) for anything you'd rely on. Out-of-sample validation arrives with the feature pipeline.
 - **Predictive edge is small** — on liquid large caps, next-day direction models typically land near the majority-class baseline; the interface reports this plainly rather than overstating results.
 - **Fallback data during outages** — when Yahoo is unreachable, quotes/charts/search fall back to reference or synthetic values. They are always flagged in the payload and badged in the interface, but they are not real prices.
-- **Store fallback outside strict mode** — without `STRICT_DB`, an unreachable MongoDB makes the server log a warning and run in-memory; data appears to save but vanishes on restart. Strict mode is on by default when deployed to Vercel.
+- **Store fallback outside strict mode** — without `STRICT_DB`, an unreachable MongoDB makes the server log a warning and run in-memory; data appears to save but vanishes on restart. Strict mode is on by default in hosted deployments.
 - **Sentiment reads wording, not markets** — FinBERT scores the tone of text; it is not a return forecast, and generated backtest/model summaries are not scored.
 - **Long/flat only** — backtests hold either a full long position or cash; no shorting, leverage, or position scaling yet.
 - **No browser end-to-end tests in CI** — CI runs the backend unit and API tests plus the frontend type check and build; interface checks are run manually.
 - **Rate limits are per process without Redis** — when Upstash isn't configured, each server instance counts separately; with Redis unreachable, limits fail open.
 - **Untyped responses** — request bodies are Pydantic models, but most responses are plain dictionaries, so the OpenAPI schema doesn't describe response shapes and frontend types are maintained by hand.
-- **Deployment configuration pending** — the code is serverless-ready (lazy store, `/api` prefix, temp-dir-only caches), but deployment files land in Phase 9.
+- **Free-tier hosting limits** — the API instance sleeps when idle (cold starts) and has a fraction of one CPU, so model training and the copilot's first message after a start can take up to about a minute; Yahoo Finance may rate-limit cloud IPs (fallback quotes are flagged).
+- **Rate limits can be sidestepped by calling the API host directly** — client IPs come from the proxy's `X-Forwarded-For`, which a caller bypassing the frontend domain can set. This only weakens per-IP limits; authentication and ownership checks are unaffected.
 
 ## 10. Repository layout
 

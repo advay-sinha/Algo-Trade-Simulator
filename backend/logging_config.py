@@ -1,7 +1,7 @@
 """Structured logging: one JSON object per line on stdout (what hosting platforms collect), plus a
 request-id middleware that tags every request and logs method, path, status, and duration.
 
-LOG_FORMAT=json|text (default: json on Vercel, text locally), LOG_LEVEL (default INFO).
+LOG_FORMAT=json|text (default: json when hosted, text locally), LOG_LEVEL (default INFO).
 Query strings are never logged (they could carry user input); request bodies are never logged.
 """
 
@@ -17,7 +17,7 @@ import uuid
 from contextvars import ContextVar
 from typing import Any, Callable, Dict
 
-from backend.config import ON_VERCEL
+from backend.config import HOSTED
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -58,7 +58,7 @@ def configure_logging() -> None:
     global _configured
     if _configured:
         return
-    fmt = os.getenv("LOG_FORMAT", "json" if ON_VERCEL else "text").lower()
+    fmt = os.getenv("LOG_FORMAT", "json" if HOSTED else "text").lower()
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter() if fmt == "json" else TextFormatter())
     app_logger = logging.getLogger("algo_trade_backend")

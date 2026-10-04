@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, Header, HTTPException, status
 
-from backend.config import IS_PRODUCTION, ON_VERCEL, mask_mongo_dsn, resolve_mongo_dsn, settings
+from backend.config import HOSTED, IS_PRODUCTION, mask_mongo_dsn, resolve_mongo_dsn, settings
 from backend.stores import (
     ASCENDING,
     AsyncIOMotorClient,
@@ -47,8 +47,8 @@ def _in_memory_fallback(reason: str) -> InMemoryStore:
 
 async def _create_store() -> Store:
     if settings.use_in_memory_db:
-        if ON_VERCEL:
-            logger.warning("USE_IN_MEMORY_DB is set on serverless hosting; data will not persist between requests")
+        if HOSTED:
+            logger.warning("USE_IN_MEMORY_DB is set on hosted infrastructure; data is lost on every restart or scale event")
         else:
             logger.info("Using in-memory data store")
         return InMemoryStore()

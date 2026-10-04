@@ -55,3 +55,28 @@ jobs:
         with:
           python-version: "3.12"
       - run: python scripts/check_bundle_size.py --requirements backend/requirements.txt
+
+  docker:
+    name: Backend image builds and serves
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: docker build -t algo-trade-api .
+      - name: Run (in-memory store, production mode)
+        run: docker run -d --name api -p 8000:8000 -e USE_IN_MEMORY_DB=true -e PORT=8000 algo-trade-api
+      - name: Smoke test
+        run: |
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/api/health && break; sleep 2; done
+          curl -fsS -D headers.txt -o /dev/null http://127.0.0.1:8000/api/health
+          grep -i '^x-request-id:' headers.txt
+          email="ci-$(date +%s)@example.com"
+          token=$(curl -fsS -X POST http://127.0.0.1:8000/api/auth/signup -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$email\",\"password\":\"Ci-check-$RANDOM-pass\",\"name\":\"CI\"}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          curl -fsS http://127.0.0.1:8000/api/status -H "Authorization: Bearer $token" | python3 -c 'import json,sys; s=json.load(sys.stdin); assert s["devEndpoints"] is False and s["strictDb"] is True, s; print("status ok:", s["store"], s["version"])'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/api/dev/auth/bypass -H 'Content-Type: application/json' -d '{}')
+          test "$code" = "404" || test "$code" = "403"
+          sleep 35; docker inspect --format '{{.State.Health.Status}}' api | grep -E 'healthy|starting'
+      - name: Logs
+        if: always()
+        run: docker logs api | tail -40

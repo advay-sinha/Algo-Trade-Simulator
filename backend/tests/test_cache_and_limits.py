@@ -114,3 +114,20 @@ def test_shared_rate_limits_count_across_calls_and_fail_open():
 
 def test_memory_storage_without_upstash():
     assert isinstance(rate_limiter.build_storage(""), rate_limiter.MemoryRateLimitStorage)
+
+
+def test_client_ip_trusts_forwarded_header_only_when_configured():
+    from starlette.requests import Request
+
+    from backend.config import settings
+    from backend.services.rate_limiter import client_ip
+
+    request = Request({"type": "http", "headers": [(b"x-forwarded-for", b"203.0.113.7, 10.0.0.2")], "client": ("10.0.0.9", 1234)})
+    saved = settings.trust_proxy_headers
+    try:
+        settings.trust_proxy_headers = False
+        assert client_ip(request) == "10.0.0.9"  # local: the header could be spoofed
+        settings.trust_proxy_headers = True
+        assert client_ip(request) == "203.0.113.7"  # behind the hosting proxy: first hop is the client
+    finally:
+        settings.trust_proxy_headers = saved
