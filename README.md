@@ -347,7 +347,7 @@ Browser ──► Vercel ─┬─ static frontend (Vite build, dist/)
    | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | optional, recommended: shares the market-data cache and rate limits across function instances (the Vercel Marketplace Upstash integration sets `KV_REST_API_*`, also accepted) |
 
    On Vercel the app automatically runs with strict database mode (no silent in-memory fallback), JSON logs, and client IPs from Vercel's `X-Forwarded-For`; the development sign-in route stays off in production. Never set `ENABLE_DEV_ENDPOINTS` or `USE_IN_MEMORY_DB`.
-3. Settings → Functions → Region: pick the region closest to your Atlas cluster (the default is Washington, D.C., `iad1`).
+3. Function region: `vercel.json` pins the API to `bom1` (Mumbai), next to the Atlas cluster; change `regions` if your database lives elsewhere — every request makes several database round trips, so the function should sit in the database's region.
 4. Deploy. Every push to `main` deploys production; pull requests get preview deployments.
 
 ### 3. Verify
