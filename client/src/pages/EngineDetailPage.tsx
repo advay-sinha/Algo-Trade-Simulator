@@ -305,7 +305,7 @@ function CopilotWorkbench() {
       <div className="table-frame">
         <ul className="list-plain">
           {[
-            ["Market data", "get_quote, get_price_history"],
+            ["Market data", "search_symbols, get_quote, get_price_history"],
             ["Strategies & backtests", "list_strategies, run_backtest, get_backtest_report, list_backtests"],
             ["Models", "train_model, get_model_signal"],
             ["Simulations", "portfolio_overview, create_simulation"],

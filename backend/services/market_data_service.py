@@ -258,6 +258,9 @@ def fetch_chart(symbol: str, range_value: str = "1mo", interval: str = "1d") -> 
         "points": points,
         "timezone": meta.get("exchangeTimezoneName"),
         "currency": meta.get("currency"),
+        "name": meta.get("longName") or meta.get("shortName"),
+        "exchange": meta.get("fullExchangeName") or meta.get("exchangeName"),
+        "instrumentType": meta.get("instrumentType"),
         "range": range_value,
         "interval": interval,
         "previousClose": meta.get("previousClose"),
@@ -478,15 +481,17 @@ def fetch_chart_with_yfinance(symbol: str, range_value: str, interval: str) -> D
             }
         )
     # history_metadata comes with the history response; fast_info would cost another request.
-    currency = None
     metadata = getattr(ticker, "history_metadata", None)
-    if isinstance(metadata, dict):
-        currency = metadata.get("currency")
+    if not isinstance(metadata, dict):
+        metadata = {}
     return {
         "symbol": symbol.upper(),
         "points": points,
         "timezone": str(history.index.tz) if history.index.tz is not None else "UTC",
-        "currency": currency,
+        "currency": metadata.get("currency"),
+        "name": metadata.get("longName") or metadata.get("shortName"),
+        "exchange": metadata.get("fullExchangeName") or metadata.get("exchangeName"),
+        "instrumentType": metadata.get("instrumentType"),
         "range": range_value,
         "interval": interval,
         "previousClose": points[0]["close"] if points else None,
@@ -498,7 +503,12 @@ def fetch_search_with_yfinance(query: str) -> List[Dict[str, Any]]:
     if yf is None:
         return []
     try:
-        search_result = yf.search(query)
+        if hasattr(yf, "Search"):  # yfinance >= 0.2.50 (`yf.search` is a module there, not a function)
+            search_result = yf.Search(query, max_results=10, news_count=0, lists_count=0, raise_errors=False).quotes
+        elif callable(getattr(yf, "search", None)):
+            search_result = yf.search(query)
+        else:
+            search_result = None
     except Exception as exc:  # noqa: BLE001
         logger.warning("yfinance search raised: %s", exc)
         search_result = None

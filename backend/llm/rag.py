@@ -229,6 +229,9 @@ def prompt_context(hits: Sequence[Dict[str, Any]]) -> str:
         "These notes were already retrieved for you; call search_research_notes only if you need different ones.",
         "",
     ]
+    from backend.llm.guardrails import fence
+
     for number, hit in enumerate(hits, start=1):
-        lines.append(f"[{number}] {hit['title']} ({hit['kind']}, similarity {hit['score']:.2f}): {hit['snippet']}")
+        lines.append(f"[{number}] ({hit['kind']}, similarity {hit['score']:.2f})")
+        lines.append(fence("note", f"Title: {hit['title']}\n{hit['snippet']}"))
     return "\n".join(lines)

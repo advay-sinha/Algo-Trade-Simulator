@@ -19,7 +19,7 @@ The project evolved from a trading simulator into a modular quant research platf
 - **Simulations** — create, track, update, and delete simulated portfolio runs per user.
 - **Accounts & sessions** — email/password signup and login, bcrypt-hashed passwords, bearer-token sessions with 7-day expiry, server-side logout, session tokens stored only as SHA-256 hashes, and per-client rate limiting on authentication.
 - **Analytics dashboard** — simulation totals, trained strategies, recent simulations, and one-month watchlist trends.
-- **Research copilot (tool-calling)** — a LangChain agent on free open-weight models (Groq, OpenRouter, Hugging Face), a fully local Ollama model, or OpenAI, that runs real platform tools on your behalf: quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, simulation creation, and research-note search and saving. Before answering, it reads your saved notes most relevant to the question and cites the ones it used. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw.
+- **Research copilot (tool-calling)** — a LangChain agent on free open-weight models (Groq, OpenRouter, Hugging Face), a fully local Ollama model, or OpenAI, that runs real platform tools on your behalf: symbol lookup by company or fund name, quotes, price history, backtests (saved), backtest reports, model training (registered), model signals, portfolio summaries, simulation creation, and research-note search and saving. Before answering, it reads your saved notes most relevant to the question and cites the ones it used. Tool activity streams to the interface as it happens; every saved action is listed under the reply with a link. Tools run as the signed-in user with the same validation as the forms, at most five tool calls per message, and provider errors are never shown raw. Prompt-injection safeguards keep it on topic: it only answers market, trading, and platform questions; attempts to override its instructions (in a message, earlier turns, saved notes, or tool results) are detected and ignored; untrusted data is fenced off from instructions; and a closing reminder restates its scope on every turn. Figures about an instrument must come from tool results, and names are resolved to a listing whose exchange and currency are checked (Indian listings use the `.NS` / `.BO` suffix) before anything is analysed.
 - **Flexible persistence** — MongoDB (Atlas or local) for durable storage, or a zero-setup in-memory mode for local development; a strict mode refuses to run without the database instead of silently losing data.
 - **Input hardening** — ticker symbols, chart ranges, and simulation states are validated before any outbound request; error responses never expose internal details.
 - **Operations** — structured JSON logs with a per-request `X-Request-ID`, an optional shared Redis (Upstash) cache and rate limiter for multi-instance hosting, pinned dependencies, a CI pipeline (tests, type check, build, deployed-size budget), and Docker Compose for a one-command local stack.
@@ -53,7 +53,7 @@ Algo-Trade-Simulator/
 │   ├── strategies/          # Strategy interface + registry: buy-and-hold, SMA crossover, momentum, mean reversion
 │   ├── analytics/           # Risk metrics (metrics.py) and risk report assembly (risk.py)
 │   ├── ml/                  # Features, datasets, training, evaluation, inference
-│   ├── llm/                 # Copilot tools, prompts, tool-calling loop, provider presets, research memory (rag.py)
+│   ├── llm/                 # Copilot tools, prompts, prompt-injection guardrails, tool-calling loop, provider presets, research memory (rag.py)
 │   ├── tests/               # pytest suite (features, backtesting, metrics, ML, tracking, copilot, API, cache/limits)
 │   ├── requirements.txt     # Points to the root requirements.txt
 │   ├── requirements-dev.txt # + test tools
@@ -390,7 +390,7 @@ pytest backend/tests
 
 Live connection checks are opt-in (they use the network and your `backend/.env`): `LIVE_CHECKS=1 pytest backend/tests/test_live_connections.py -v`.
 
-The suite covers feature leakage, the backtesting engine, risk metrics, ML training and the registry, experiment tracking, copilot tools and providers, the HTTP API contract (auth, ownership, validation, rate limits), and the shared cache and rate limiter.
+The suite covers feature leakage, the backtesting engine, risk metrics, ML training and the registry, experiment tracking, copilot tools, providers, and prompt-injection safeguards, the HTTP API contract (auth, ownership, validation, rate limits), and the shared cache and rate limiter.
 
 ### Continuous integration
 

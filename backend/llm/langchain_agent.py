@@ -4,15 +4,19 @@ user-scoped), feed results back, and stop at a hard per-message budget."""
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, AsyncIterator, Dict, List, Optional, Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import ValidationError
 
+from backend.llm.guardrails import TOOL_RESULT_WARNING, detect_injection, fence
 from backend.llm.prompts import BUDGET_REACHED
 from backend.llm.tools import STATE_CHANGING
 from backend.services.research_actions import ActionError
+
+logger = logging.getLogger("algo_trade_backend.copilot")
 
 MAX_TOOL_CALLS = 5
 MAX_TOOL_RESULT_CHARS = 6000
@@ -76,6 +80,10 @@ async def run_agent(
             content = json.dumps(result, default=str)
             if len(content) > MAX_TOOL_RESULT_CHARS:
                 content = content[:MAX_TOOL_RESULT_CHARS] + '..."(truncated)"'
+            flags = detect_injection(content)
+            if flags:
+                logger.warning("Tool %s result flagged for prompt injection: %s", name, ",".join(flags))
+                content = f"{TOOL_RESULT_WARNING}\n{fence('tool result', content)}"
             messages.append(ToolMessage(content=content, tool_call_id=call_id))
             yield {"type": "tool_end", "id": call_id, "name": name, "ok": ok, "error": None if ok else result.get("error"), "result": result if ok else None}
         if used >= max_tool_calls:

@@ -188,3 +188,98 @@ def test_sse_endpoint_streams_events():
     finally:
         copilot_service.make_llm, copilot_service.configured = original_factory, original_configured
         app.dependency_overrides.clear()
+
+
+def test_search_symbols_tool_returns_named_matches_with_exchange():
+    async def fake_search(query):
+        return [
+            {"symbol": "GOLDBEES.NS", "shortName": "NIP IND ETF GOLD BEES", "longName": "Nippon India ETF Gold BeES", "exchange": "NSI", "type": "ETF", "source": "live"},
+            {"symbol": "GOLD", "shortName": "Barrick Gold Corporation", "exchange": "NYQ", "type": "EQUITY", "source": "live"},
+        ]
+
+    original = market.search
+    market.search = fake_search
+    try:
+        llm = ScriptedLLM([tool_call("search_symbols", {"query": "nippon gold etf"}, "s1"), AIMessage(content="GOLDBEES.NS")])
+        events = run("alice", new_store(), "find the nippon gold etf", llm)
+    finally:
+        market.search = original
+    end = next(e for e in events if e["type"] == "tool_end")
+    assert end["ok"] is True
+    first = end["result"]["matches"][0]
+    assert first == {"symbol": "GOLDBEES.NS", "name": "Nippon India ETF Gold BeES", "exchange": "NSI", "type": "ETF"}
+
+
+def test_search_symbols_hides_offline_echoes():
+    async def offline_search(query):
+        return [{"symbol": query.upper(), "shortName": query.upper(), "exchange": "OFFLINE", "type": "EQUITY", "source": "offline"}]
+
+    original = market.search
+    market.search = offline_search
+    try:
+        llm = ScriptedLLM([tool_call("search_symbols", {"query": "Zerodha Gold"}, "s1"), AIMessage(content="Need the ticker.")])
+        events = run("alice", new_store(), "zerodha gold", llm)
+    finally:
+        market.search = original
+    result = next(e for e in events if e["type"] == "tool_end")["result"]
+    assert result["matches"] == [] and "note" in result
+
+
+def test_missing_fallback_model_does_not_mask_the_rate_limit():
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class NotFoundError(Exception):
+        status_code = 404
+
+    errors = {"primary": RateLimitError("slow down"), "bad-fallback": NotFoundError("no such model")}
+
+    class PerModel(ScriptedLLM):
+        def __init__(self, model):
+            super().__init__(responses=[AIMessage(content="from good fallback")])
+            self.model = model
+
+        async def ainvoke(self, messages):
+            if self.model in errors:
+                raise errors[self.model]
+            return await super().ainvoke(messages)
+
+    original = copilot_service._models
+    copilot_service._models = lambda: ["primary", "bad-fallback", "good"]
+    try:
+        async def collect():
+            return [e async for e in copilot_service.stream_chat("alice", new_store(), "hi", [], llm_factory=PerModel)]
+
+        events = asyncio.run(collect())
+        assert next(e for e in events if e["type"] == "message")["content"] == "from good fallback"
+        copilot_service._models = lambda: ["primary", "bad-fallback"]
+        events = asyncio.run(collect())
+        assert next(e for e in events if e["type"] == "error")["message"] == copilot_service.RATE_LIMITED
+    finally:
+        copilot_service._models = original
+
+
+def test_price_history_tool_reports_instrument_identity():
+    async def history_with_meta(symbol, range_value):
+        chart = await fake_history(symbol, range_value)
+        return {**chart, "currency": "INR", "name": "Nippon India ETF Gold BeES", "exchange": "NSE", "instrumentType": "ETF"}
+
+    original = market.get_daily_history
+    market.get_daily_history = history_with_meta
+    try:
+        llm = ScriptedLLM([tool_call("get_price_history", {"symbol": "GOLDBEES.NS", "range": "1y"}, "h1"), AIMessage(content="Up.")])
+        events = run("alice", new_store(), "how did GOLDBEES.NS do", llm)
+    finally:
+        market.get_daily_history = original
+    result = next(e for e in events if e["type"] == "tool_end")["result"]
+    assert (result["name"], result["exchange"], result["currency"], result["instrumentType"]) == ("Nippon India ETF Gold BeES", "NSE", "INR", "ETF")
+
+
+def test_prompt_requires_grounded_figures_and_symbol_resolution():
+    from backend.llm.prompts import SYSTEM_PROMPT
+
+    llm = ScriptedLLM([AIMessage(content="ok")])
+    run("alice", new_store(), "was my gold etf ok?", llm)
+    assert "search_symbols" in llm.tool_names
+    assert "search_symbols" in SYSTEM_PROMPT and ".NS" in SYSTEM_PROMPT
+    assert "tool results" in llm.calls[-1][-1].content  # closing reminder repeats the grounding rule

@@ -19,6 +19,7 @@ const SUGGESTIONS = [
 const HISTORY_TURNS = 8;
 
 const TOOL_LABELS: Record<string, string> = {
+  search_symbols: "Looking up symbols",
   get_quote: "Fetching quotes",
   get_price_history: "Reading price history",
   list_strategies: "Listing strategies",

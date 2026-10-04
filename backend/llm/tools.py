@@ -39,6 +39,10 @@ class QuoteArgs(BaseModel):
     symbols: List[str] = Field(min_length=1, max_length=10, description="Ticker symbols, e.g. ['AAPL', 'MSFT'].")
 
 
+class SymbolSearchArgs(BaseModel):
+    query: str = Field(min_length=1, max_length=80, description="Company, fund, or ETF name (or partial ticker), e.g. 'Nippon gold ETF' or 'Infosys'.")
+
+
 class HistoryArgs(BaseModel):
     symbol: str = Field(pattern=SYMBOL_PATTERN)
     range: Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"] = "1y"
@@ -112,6 +116,20 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         quotes = await market.get_quotes(parse_symbol_list(",".join(symbols)))
         return {"quotes": [_round({k: q.get(k) for k in ("symbol", "price", "changePercent", "currency", "source", "updated")}) for q in quotes]}
 
+    async def search_symbols(query: str) -> Dict[str, Any]:
+        # The offline fallback echoes the query back as a "symbol"; the model must not mistake that for a listing.
+        matches = [m for m in await market.search(query) if m.get("source") == "live"]
+        result: Dict[str, Any] = {
+            "query": query,
+            "matches": [
+                {"symbol": m.get("symbol"), "name": m.get("longName") or m.get("shortName"), "exchange": m.get("exchange"), "type": m.get("type")}
+                for m in matches[:8]
+            ],
+        }
+        if not matches:
+            result["note"] = "No live listings found (search may be unavailable). Search matches distinctive keywords best: retry once with one word from the name or a ticker-like token (e.g. 'goldbees' for Nippon India ETF Gold BeES), otherwise ask the user for the exact symbol."
+        return result
+
     async def get_price_history(symbol: str, range: str = "1y") -> Dict[str, Any]:
         chart = await market.get_daily_history(symbol, range)
         bars = bars_from_points(chart.get("points", []))
@@ -122,6 +140,9 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         return _round(
             {
                 "symbol": symbol.upper(),
+                "name": chart.get("name"),
+                "exchange": chart.get("exchange"),
+                "instrumentType": chart.get("instrumentType"),
                 "range": range,
                 "bars": len(bars),
                 "start": bars.index[0].date().isoformat(),
@@ -262,8 +283,9 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         return {"id": record["id"], "title": record["title"], "created": created, "indexed": bool(record.get("embedding")), "sentiment": record.get("sentiment")}
 
     specs = [
+        (search_symbols, "search_symbols", "Find ticker symbols by company/fund/ETF name, with exchange and type. Use it before quoting anything the user names instead of giving an exact ticker.", SymbolSearchArgs),
         (get_quote, "get_quote", "Latest quotes for up to 10 symbols, with data source flags.", QuoteArgs),
-        (get_price_history, "get_price_history", "Summary of a symbol's daily price history over a range (return, high/low, volatility).", HistoryArgs),
+        (get_price_history, "get_price_history", "Summary of a symbol's daily price history over a range (instrument name, exchange, currency, return, high/low, volatility).", HistoryArgs),
         (get_strategies, "list_strategies", "Strategies the backtester can run, with their parameters and defaults.", NoArgs),
         (run_backtest, "run_backtest", "Run AND SAVE a backtest with costs and slippage; returns performance, risk metrics, and benchmark comparison.", BacktestArgs),
         (get_backtest_report, "get_backtest_report", "Full saved report for one backtest (metrics, drawdown, trades, assumptions) — use it to explain results.", BacktestIdArgs),

@@ -62,3 +62,10 @@ def test_groq_preset_fallbacks_apply_unless_overridden():
     assert explicit.fallbacks == ("a", "b")
     custom_model = with_env({"GROQ_API_KEY": "g", "LLM_MODEL": "qwen/qwen3.8-27b"}, resolve)
     assert custom_model.fallbacks == ()
+
+
+def test_legacy_openai_fallbacks_only_apply_to_openai():
+    groq = with_env({"GROQ_API_KEY": "g", "OPENAI_MODEL_FALLBACKS": "gpt-4o,gpt-3.5-turbo"}, resolve)
+    assert groq.provider == "groq" and groq.fallbacks == ("openai/gpt-oss-20b",)
+    openai = with_env({"OPENAI_API_KEY": "o", "OPENAI_MODEL_FALLBACKS": "gpt-4o,gpt-3.5-turbo"}, resolve)
+    assert openai.provider == "openai" and openai.fallbacks == ("gpt-4o", "gpt-3.5-turbo")

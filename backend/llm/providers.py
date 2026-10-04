@@ -66,7 +66,9 @@ def resolve() -> Optional[LlmConfig]:
     base_url = _env("LLM_BASE_URL") or (_env("OLLAMA_BASE_URL") if provider == "ollama" else None) or preset["base_url"]
     legacy_model = _env("OPENAI_MODEL") if provider == "openai" else None
     model = _env("LLM_MODEL") or legacy_model or str(preset["model"])
-    raw_fallbacks = os.getenv("LLM_MODEL_FALLBACKS") or os.getenv("OPENAI_MODEL_FALLBACKS")
+    # The legacy OPENAI_* names hold OpenAI model ids, so they only apply to the openai provider.
+    legacy_fallbacks = os.getenv("OPENAI_MODEL_FALLBACKS") if provider == "openai" else None
+    raw_fallbacks = os.getenv("LLM_MODEL_FALLBACKS") or legacy_fallbacks
     if raw_fallbacks is None and not _env("LLM_MODEL"):
         raw_fallbacks = preset.get("fallbacks") or ""
     fallbacks = tuple(item.strip() for item in (raw_fallbacks or "").split(",") if item.strip() and item.strip() != model)
