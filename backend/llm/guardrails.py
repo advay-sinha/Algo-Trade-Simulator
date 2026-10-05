@@ -72,16 +72,38 @@ def fence(label: str, text: str) -> str:
 
 
 _DECISION = re.compile(
-    r"\b(should\s+i|shall\s+i|do\s+i|would\s+you|is\s+it\s+(a\s+)?(good|right|wise)\s+(time|idea)\s+to|tell\s+me\s+(to|whether\s+to))\b[^?\n]{0,60}\b(buy|sell|hold|exit|book|rebalance|switch|add|trim|invest|redeem|keep)\b"
-    r"|\b(what|which)\b[^?\n]{0,40}\b(should|to)\s+(i\s+)?(buy|sell|hold|exit|rebalance)\b"
-    r"|\brebalanc\w*\s+my\b",
+    r"\b(should\s+i|shall\s+i|do\s+i|would\s+you|is\s+it\s+(a\s+)?(good|right|wise|safe)\s+(time|idea)\s+to|tell\s+me\s+(to|whether\s+to))\b[^?\n]{0,60}\b(buy|sell|hold|exit|book|rebalance|switch|add|trim|invest|redeem|keep)\b"
+    r"|\b(what|which)\b[^?\n]{0,40}\b(should|to)\s+(i\s+)?(buy|sell|hold|exit|rebalance|invest)\b"
+    r"|\brebalanc\w*\s+my\b"
+    # "is RELIANCE good for investing", "is TCS a good stock / buy", "worth buying", "buy or sell"
+    r"|\b(is|are)\b[^?\n]{1,60}\b(good|great|safe|worth|right|bad)\b[^?\n]{0,30}\b(invest\w*|buy\w*|stocks?|shares?|pick|bet|hold\w*|long\s+term)\b"
+    r"|\bworth\s+(buying|investing|holding)\b"
+    r"|\b(buy|sell)\s+or\s+(sell|hold|buy|not)\b"
+    r"|\b(good|best|top)\s+(stocks?|shares?)\s+to\s+(buy|invest|hold)\b"
+    r"|\b(should|can)\s+i\s+invest\b",
     re.IGNORECASE,
 )
 
+# Closes every answer to an investment question (appended server-side if the model leaves it out).
+DISCLAIMER = (
+    "⚠️ Disclaimer: this is research analysis, not financial advice. Please make investment decisions "
+    "based on your own understanding and research, not solely on the analysis produced here. Signals and "
+    "past performance do not guarantee future results."
+)
+DISCLAIMER_MARKER = "this is research analysis, not financial advice"
+
 
 def asks_for_advice(text: str) -> bool:
-    """True when a message asks for a buy/sell/hold decision (answered with evidence, never advice)."""
+    """True for investment questions (buy / sell / hold, "is X good to invest in"): they are answered
+    with a research report, the current signals and the disclaimer."""
     return bool(text and _DECISION.search(text))
+
+
+def with_disclaimer(text: str) -> str:
+    """The answer with the disclaimer at the end (once)."""
+    if not text or DISCLAIMER_MARKER in text.lower():
+        return text
+    return f"{text.rstrip()}\n\n{DISCLAIMER}"
 
 
 def turn_reminder(flags: Sequence[str], history_flags: Sequence[str] = (), advice: bool = False, masked: Sequence[str] = ()) -> str:
@@ -110,9 +132,14 @@ def turn_reminder(flags: Sequence[str], history_flags: Sequence[str] = (), advic
         )
     if advice:
         lines.append(
-            "The user is asking whether to buy, sell, hold or rebalance. You must not decide for them or "
-            "say what they should do. Say plainly that you can't make that call, then lay out the evidence "
-            "and risks from tool results (for their own holdings use analyze_portfolio) so they can judge."
+            "This is an investment question. Don't refuse it: research the company and answer with a short "
+            "report. Resolve names with search_symbols, call analyze_stock for each stock (add "
+            "get_company_capex or the flow tools when useful; for the user's own holdings also "
+            "analyze_portfolio). Report: snapshot, performance and risk, the signals (each strategy's current "
+            "signal and the overall signal tilt), any fundamentals you fetched, key risks, and a 'Research "
+            "view' saying what the evidence currently leans toward and why. Don't promise outcomes, give price "
+            "targets or position sizes, or call anything certain. End with this disclaimer exactly: "
+            + DISCLAIMER
         )
     if masked:
         lines.append(

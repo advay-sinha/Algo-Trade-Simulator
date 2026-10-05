@@ -62,6 +62,15 @@ interface Turn {
   /** This reply used the user's real holdings: show the disclaimer (and, the first time, the data notice). */
   usedPortfolio?: boolean;
   portfolioNotice?: boolean;
+  /** Investment question: the server's disclaimer, shown as a warning under the answer. */
+  disclaimer?: string;
+}
+
+/** The answer without the trailing disclaimer (it is shown as a warning box instead). */
+function withoutDisclaimer(content: string, disclaimer?: string): string {
+  if (!disclaimer) return content;
+  const at = content.lastIndexOf(disclaimer);
+  return at >= 0 ? content.slice(0, at).trimEnd() : content;
 }
 
 function num(value: unknown): number | null {
@@ -167,6 +176,8 @@ export function CopilotDrawer({
       updateLast((turn) => ({ ...turn, sources: event.sources }));
     } else if (event.type === "masked") {
       updateLast((turn) => ({ ...turn, maskedKinds: event.kinds }));
+    } else if (event.type === "advisory") {
+      updateLast((turn) => ({ ...turn, disclaimer: event.disclaimer }));
     } else if (event.type === "error") {
       updateLast((turn) => ({ ...turn, error: event.message }));
     }
@@ -316,7 +327,16 @@ export function CopilotDrawer({
                     ))}
                   </div>
                 ) : null}
-                {turn.content ? <div className="bubble">{turn.role === "assistant" ? <MarkdownResponse content={turn.content} /> : turn.content}</div> : null}
+                {turn.content ? (
+                  <div className="bubble">{turn.role === "assistant" ? <MarkdownResponse content={withoutDisclaimer(turn.content, turn.disclaimer)} /> : turn.content}</div>
+                ) : null}
+                {turn.disclaimer && turn.content ? (
+                  <div role="note" aria-label="Disclaimer">
+                    <Notice tone="warn" icon="alert">
+                      {turn.disclaimer.replace(/^⚠️\s*/, "")}
+                    </Notice>
+                  </div>
+                ) : null}
                 {turn.maskedKinds?.length ? (
                   <span className="text-meta">
                     <Icon name="shield" /> Personal details ({turn.maskedKinds.map((kind) => KIND_LABELS[kind as PiiKind] ?? kind).join(", ")}) were removed before your question was sent.
@@ -328,7 +348,7 @@ export function CopilotDrawer({
                   </span>
                 ) : null}
                 {turn.pending && !turn.content && !turn.error ? <span className="text-meta">Thinking…</span> : null}
-                {turn.usedPortfolio && turn.content ? <span className="text-meta">Research analytics, not financial advice.</span> : null}
+                {turn.usedPortfolio && turn.content && !turn.disclaimer ? <span className="text-meta">Research analytics, not financial advice.</span> : null}
                 {turn.error ? (
                   <Notice tone="warn" icon="alert">
                     {turn.error}

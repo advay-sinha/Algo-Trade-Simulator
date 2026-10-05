@@ -118,6 +118,10 @@ class CapexArgs(BaseModel):
     symbols: List[str] = Field(min_length=1, max_length=5, description="Company tickers, e.g. ['RELIANCE.NS', 'LT.NS'].")
 
 
+class StockAnalysisArgs(BaseModel):
+    symbol: str = Field(pattern=SYMBOL_PATTERN, description="Exact ticker from search_symbols, e.g. 'RELIANCE.NS'.")
+
+
 class ResearchRunIdArgs(BaseModel):
     run_id: str = Field(pattern=r"^[0-9a-f]{32}$", description="Research run or comparison id from list_research_runs.")
 
@@ -451,6 +455,11 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         ctx.actions.append({"type": "note", "id": record["id"], "label": f"Note · {record['title']}", "path": "/research"})
         return {"id": record["id"], "title": record["title"], "created": created, "indexed": bool(record.get("embedding")), "sentiment": record.get("sentiment")}
 
+    async def analyze_stock(symbol: str) -> Dict[str, Any]:
+        from backend.services.stock_analysis import analyze
+
+        return await analyze(symbol, ctx.store, ctx.user_id)
+
     async def list_research_runs() -> Dict[str, Any]:
         from backend.services.research_explain import run_list_item
 
@@ -485,6 +494,7 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         (search_symbols, "search_symbols", "Find ticker symbols by company/fund/ETF name, with exchange and type. Use it before quoting anything the user names instead of giving an exact ticker.", SymbolSearchArgs),
         (get_quote, "get_quote", "Latest quotes for up to 10 symbols, with data source flags.", QuoteArgs),
         (get_price_history, "get_price_history", "Summary of a symbol's daily price history over a range (instrument name, exchange, currency, return, high/low, volatility).", HistoryArgs),
+        (analyze_stock, "analyze_stock", "Research snapshot of one stock for investment questions: returns over 1m-1y, 52-week range, volatility, drawdown, beta, trend vs the 200-day average, RSI, each built-in strategy's current signal with its reason, the user's ML model signal if any, and the overall signal tilt (percent fields end in Pct).", StockAnalysisArgs),
         (get_strategies, "list_strategies", "Strategies the backtester can run, with their parameters and defaults.", NoArgs),
         (run_backtest, "run_backtest", "Run AND SAVE a backtest with costs and slippage; returns performance, risk metrics, and benchmark comparison.", BacktestArgs),
         (get_backtest_report, "get_backtest_report", "Full saved report for one backtest (metrics, drawdown, trades, assumptions) — use it to explain results.", BacktestIdArgs),

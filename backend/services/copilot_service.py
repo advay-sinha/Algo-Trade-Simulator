@@ -271,9 +271,13 @@ async def stream_chat(
     history_flags = guardrails.detect_in_many(str(t.get("content", "")) for t in history if t.get("role") == "user")
     if flags or history_flags:
         logger.warning("Copilot prompt-injection flags: message=%s history=%s", ",".join(flags) or "-", ",".join(history_flags) or "-")
-    messages.append(SystemMessage(content=guardrails.turn_reminder(flags, history_flags, advice=guardrails.asks_for_advice(message), masked=masked_kinds)))
+    investment_question = guardrails.asks_for_advice(message)
+    messages.append(SystemMessage(content=guardrails.turn_reminder(flags, history_flags, advice=investment_question, masked=masked_kinds)))
     if masked_kinds:
         yield {"type": "masked", "kinds": masked_kinds}
+    if investment_question:
+        # The interface shows the disclaimer as a warning under the answer.
+        yield {"type": "advisory", "disclaimer": guardrails.DISCLAIMER}
     started: Dict[str, str] = {}
     completed: List[Dict[str, Any]] = []
     try:
@@ -282,6 +286,9 @@ async def stream_chat(
                 started[event["id"]] = event.get("args", "")
             elif event["type"] == "tool_end" and event.get("ok"):
                 completed.append({"name": event["name"], "args": started.get(event["id"], ""), "result": event.get("result")})
+            elif event["type"] == "message" and investment_question:
+                # Never rely on the model to remember it: every investment answer ends with the disclaimer.
+                event = {**event, "content": guardrails.with_disclaimer(event.get("content", ""))}
             yield event
     except Exception as exc:  # noqa: BLE001 - never leak provider error text to clients
         logger.warning("Copilot failed: %s", type(exc).__name__)
