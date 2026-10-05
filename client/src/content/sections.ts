@@ -59,12 +59,18 @@ export const SECTIONS = {
     summary:
       "Watch quotes for your watchlist and inspect any symbol's price action. Quotes refresh every 30 seconds while this tab is visible, and every value shows where it came from.",
     howItWorks: [
-      "Pick a range, then a symbol from the watchlist or search.",
+      "Pick a range, then a symbol from the watchlist or start typing a company name or ticker.",
       "Quotes refresh every 30 s; refreshing pauses when the tab is hidden.",
       "Fallback values are badged so you never mistake them for live data.",
     ],
     features: [
       { id: "range", label: "Range", hoverText: "Window of history for the chart. 5 days uses hourly bars; longer ranges use daily bars." },
+      {
+        id: "search",
+        label: "Find a symbol",
+        hoverText:
+          "Suggestions come from an offline list of NSE, US and index symbols searched in your browser, so typing sends no requests. Names, tickers, short names (SBI, L&T) and initials (TCS) all work. Not listed? Use the Yahoo search option at the end of the list.",
+      },
       { id: "quotes", label: "Watchlist quotes", hoverText: "Latest price and change versus the previous close. Select a row to chart that symbol." },
       { id: "source", label: "Data source", hoverText: "Live means fetched from the provider now. Offline or synthetic means a fallback — don't evaluate strategies on it." },
     ],
@@ -211,14 +217,60 @@ export const SECTIONS = {
     title: "Simulations",
     navLabel: "Simulations",
     summary:
-      "Paper-trading runs you're tracking: which symbol, which strategy, and how much simulated capital in INR. Existing saved budget amounts keep their numeric value in rupees; no exchange-rate conversion is applied. Create one, move it through its lifecycle, or remove it.",
+      "Forward paper trading. Pick a symbol, a strategy and a rupee budget, and the simulation follows the market from today: it trades on the strategy's signals at each next open and shows where it stands against simply holding the stock and the market index. No real money or orders are involved.",
     howItWorks: [
-      "Create a simulation with a symbol, strategy, and starting capital in INR.",
-      "Move it between active, paused, completed, and archived.",
-      "Delete asks for confirmation and can't be undone.",
+      "From the start date on, each signal at a close fills at the next session's open, with costs and slippage.",
+      "Open positions are valued at the live quote while the market is open, and at the last close otherwise.",
+      "Pause to stop new orders, or complete it to freeze the final result.",
     ],
-    features: [],
+    features: [
+      { id: "forward", label: "Starts today", hoverText: "Nothing before the start date is traded. Earlier prices only warm up the strategy's indicators, so results aren't a backtest in disguise." },
+      { id: "compare", label: "Against the market", hoverText: "Every simulation is compared with buying and holding the same stock from the same first open, and with its market index (Nifty 50 for Indian listings)." },
+      { id: "inr", label: "Rupee budget", hoverText: "Budgets are in INR. US and other listings are bought and valued through the daily exchange rate, so currency moves show up in the result." },
+      { id: "lifecycle", label: "Pause and complete", hoverText: "Paused days place no orders but keep valuing what you hold. Completing freezes the final report; it won't change afterwards." },
+    ],
     status: "live",
+  },
+  flows: {
+    id: "flows",
+    route: "/flows",
+    title: "Market flows",
+    navLabel: "Market flows",
+    summary:
+      "Who is buying and selling the Indian market, where foreign money is going by sector, and how much companies are investing. Figures come from NSE, NSDL and company filings; each shows its date and how often the source updates, and nothing here is a trading signal.",
+    howItWorks: [
+      "FII/FPI and DII cash-market activity and derivatives positioning are captured from NSE after each trading day and build up into a history.",
+      "Sector-wise foreign portfolio flows come from NSDL's fortnightly report, next to recent sector index returns.",
+      "Capex comes from companies' annual cash-flow statements, for one company or summed by sector across the Nifty 50.",
+    ],
+    features: [
+      { id: "cash", label: "FII / DII cash", hoverText: "NSE's provisional daily figures for foreign portfolio investors (FII/FPI) and domestic institutions (DII) in the cash market: gross buying, selling and net, in rupees crore." },
+      { id: "positioning", label: "Positioning", hoverText: "Share of FII index-futures open interest that is long, from NSE's participant-wise open interest file. Below 50% means FIIs hold more short than long index futures." },
+      { id: "sectors", label: "Sector flows", hoverText: "NSDL's fortnightly report of foreign portfolio net investment in each sector's equity, with each sector's share of total FPI equity holdings." },
+      { id: "capex", label: "Capex intensity", hoverText: "Capital expenditure as a share of revenue, from the company's reported annual statements. Annual data lags by months; compare years, not quarters." },
+    ],
+    status: "beta",
+    phase: 11,
+  },
+  portfolio: {
+    id: "portfolio",
+    route: "/portfolio",
+    title: "Portfolio",
+    navLabel: "Portfolio",
+    summary:
+      "Bring in your real holdings from any Indian broker and see how concentrated, diversified and risky they are, measured with the same engine that powers backtests. Files are read in your browser; only the instrument, quantity, cost and date are stored, and anything that looks like personal data is refused.",
+    howItWorks: [
+      "Remove personal details, then choose a broker CSV or enter holdings by hand.",
+      "Match the columns and check the preview — values that look like a PAN, phone number or account ID must be removed before upload.",
+      "The server checks everything again, matches each holding to a real listing, and stores holding fields only. Delete any time.",
+    ],
+    features: [
+      { id: "browser", label: "Read in your browser", hoverText: "Files are opened on your device. Only the matched holding columns are sent; every other column, and the file itself, stays with you." },
+      { id: "detect", label: "Personal data refused", hoverText: "PANs, Aadhaar numbers, demat and bank account numbers, IFSC codes, emails, phone numbers, UPI IDs and dates of birth are detected in the preview and again on the server. One finding refuses the whole import; nothing is half-saved." },
+      { id: "delete", label: "Delete any time", hoverText: "Remove one import or all portfolio data with a single action. Deletion is permanent." },
+    ],
+    status: "beta",
+    phase: 10,
   },
   research: {
     id: "research",

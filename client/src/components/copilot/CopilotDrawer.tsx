@@ -4,6 +4,7 @@ import { MarkdownResponse } from "./MarkdownResponse";
 import { streamCopilot } from "../../api";
 import { describeError } from "../../lib/errors";
 import { formatFraction, formatSignedFraction } from "../../lib/format";
+import { KIND_LABELS, maskText, type PiiKind } from "../../lib/pii";
 import { useAuthed } from "../../lib/session";
 import type { CopilotAction, CopilotEvent, RagHit } from "../../types";
 import { Icon } from "../ui/Icon";
@@ -31,7 +32,12 @@ const TOOL_LABELS: Record<string, string> = {
   train_model: "Training model",
   get_model_signal: "Getting model signal",
   create_simulation: "Creating simulation",
+  get_simulation_report: "Reading simulation report",
+  analyze_portfolio: "Analyzing your holdings",
+  search_research_notes: "Searching your notes",
+  save_research_note: "Saving a note",
 };
+const PORTFOLIO_TOOL = "analyze_portfolio";
 
 interface Activity {
   id: string;
@@ -51,6 +57,11 @@ interface Turn {
   sources?: RagHit[];
   error?: string;
   pending?: boolean;
+  /** Personal-data kinds the server replaced with placeholders before calling the model. */
+  maskedKinds?: string[];
+  /** This reply used the user's real holdings: show the disclaimer (and, the first time, the data notice). */
+  usedPortfolio?: boolean;
+  portfolioNotice?: boolean;
 }
 
 function num(value: unknown): number | null {
@@ -116,6 +127,8 @@ export function CopilotDrawer({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [piiPrompt, setPiiPrompt] = useState<{ text: string; kinds: PiiKind[] } | null>(null);
+  const portfolioNoticeShown = useRef(false);
   const logEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -131,7 +144,14 @@ export function CopilotDrawer({
 
   const onEvent = (event: CopilotEvent) => {
     if (event.type === "tool_start") {
-      updateLast((turn) => ({ ...turn, activities: [...turn.activities, { id: event.id, name: event.name, args: event.args, status: "running" }] }));
+      const firstPortfolio = event.name === PORTFOLIO_TOOL && !portfolioNoticeShown.current;
+      if (event.name === PORTFOLIO_TOOL) portfolioNoticeShown.current = true;
+      updateLast((turn) => ({
+        ...turn,
+        activities: [...turn.activities, { id: event.id, name: event.name, args: event.args, status: "running" }],
+        usedPortfolio: turn.usedPortfolio || event.name === PORTFOLIO_TOOL,
+        portfolioNotice: turn.portfolioNotice || firstPortfolio,
+      }));
     } else if (event.type === "tool_end") {
       updateLast((turn) => ({
         ...turn,
@@ -145,14 +165,23 @@ export function CopilotDrawer({
       updateLast((turn) => ({ ...turn, actions: event.actions }));
     } else if (event.type === "sources") {
       updateLast((turn) => ({ ...turn, sources: event.sources }));
+    } else if (event.type === "masked") {
+      updateLast((turn) => ({ ...turn, maskedKinds: event.kinds }));
     } else if (event.type === "error") {
       updateLast((turn) => ({ ...turn, error: event.message }));
     }
   };
 
-  const send = async (text: string) => {
+  const send = async (text: string, reviewed = false) => {
     const message = text.trim();
     if (!message || sending) return;
+    // Chat goes to a third-party model provider: ask before anything that looks like personal data leaves.
+    const { kinds } = maskText(message);
+    if (kinds.length && !reviewed) {
+      setPiiPrompt({ text: message, kinds });
+      return;
+    }
+    setPiiPrompt(null);
     const history = turns
       .filter((turn) => turn.content)
       .slice(-HISTORY_TURNS)
@@ -189,6 +218,28 @@ export function CopilotDrawer({
       returnFocusRef={returnFocusRef}
       footer={
         <form onSubmit={onSubmit} className="stack" style={{ width: "100%", gap: "var(--space-2)" }}>
+          {piiPrompt ? (
+            <Notice tone="warn" icon="shield">
+              <span>
+                This looks like {piiPrompt.kinds.map((kind) => KIND_LABELS[kind]).join(" and ")}. Remove it before sending? Your question goes to an external language-model provider.
+              </span>
+              <span className="cluster" style={{ marginTop: "var(--space-2)" }}>
+                <button type="button" className="btn btn-primary" onClick={() => void send(maskText(piiPrompt.text).masked, true)}>
+                  Remove and send
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    setDraft(piiPrompt.text);
+                    setPiiPrompt(null);
+                  }}
+                >
+                  Edit message
+                </button>
+              </span>
+            </Notice>
+          ) : null}
           <label className="field">
             <span className="field-label">Your question</span>
             <textarea
@@ -266,7 +317,18 @@ export function CopilotDrawer({
                   </div>
                 ) : null}
                 {turn.content ? <div className="bubble">{turn.role === "assistant" ? <MarkdownResponse content={turn.content} /> : turn.content}</div> : null}
+                {turn.maskedKinds?.length ? (
+                  <span className="text-meta">
+                    <Icon name="shield" /> Personal details ({turn.maskedKinds.map((kind) => KIND_LABELS[kind as PiiKind] ?? kind).join(", ")}) were removed before your question was sent.
+                  </span>
+                ) : null}
+                {turn.portfolioNotice ? (
+                  <span className="text-meta">
+                    <Icon name="info" /> A summary of your holdings — weights and risk figures, no quantities, costs or dates — was sent to the language-model provider to answer this.
+                  </span>
+                ) : null}
                 {turn.pending && !turn.content && !turn.error ? <span className="text-meta">Thinking…</span> : null}
+                {turn.usedPortfolio && turn.content ? <span className="text-meta">Research analytics, not financial advice.</span> : null}
                 {turn.error ? (
                   <Notice tone="warn" icon="alert">
                     {turn.error}

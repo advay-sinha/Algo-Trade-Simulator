@@ -9,6 +9,7 @@ Every path filters by user id; one user's notes never reach another user.
 
 from __future__ import annotations
 
+
 import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Sequence
@@ -16,7 +17,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import numpy as np
 
 from backend.config import settings
-from backend.services import hf_inference, sentiment_service
+from backend.services import hf_inference, pii, sentiment_service
 from backend.services.hf_inference import NlpError
 
 logger = logging.getLogger("algo_trade_backend.rag")
@@ -27,10 +28,11 @@ PROMPT_MIN_SCORE = 0.35  # cosine similarity; below this a note is rarely releva
 
 
 class NoteError(Exception):
-    def __init__(self, message: str, status: int = 400) -> None:
+    def __init__(self, message: str, status: int = 400, findings: Optional[List[Dict[str, Any]]] = None) -> None:
         super().__init__(message)
         self.message = message
         self.status = status
+        self.findings = findings or []
 
 
 def note_text(note: Dict[str, Any]) -> str:
@@ -115,6 +117,21 @@ async def create_note(
 ) -> Dict[str, Any]:
     """Save a note (or a backtest/model summary) for the user. The returned record carries
     `_created` (False when that backtest/model was already saved — saves are idempotent)."""
+    # Notes are stored: personal data in what the user wrote refuses the save (never redacted).
+    # Generated backtest/model summaries are ours, so only the user's own text and tags are scanned.
+    written = {"body": body or "", **{f"tag{index + 1}": tag for index, tag in enumerate(tags)}}
+    if kind == "note":
+        written["title"] = title or ""
+    findings = pii.scan_fields(written)
+    if findings:
+        logger.info("research note refused: personal data %s", pii.count_by_kind(findings))
+        first = findings[0]
+        field = "a tag" if first.field.startswith("tag") else f"the {first.field}"
+        raise NoteError(
+            f"The note wasn't saved: {field} looks like {pii.KIND_LABELS[first.kind]}. Remove it and save again.",
+            422,
+            [{"field": "tags" if f.field.startswith("tag") else f.field, "kind": f.kind, "label": pii.KIND_LABELS[f.kind]} for f in findings],
+        )
     symbol = ""
     if kind in ("backtest", "model"):
         if not ref_id:
@@ -131,6 +148,7 @@ async def create_note(
         symbol = document["symbol"]
     elif not (title and title.strip() and body and body.strip()):
         raise NoteError("A note needs a title and a body", 422)
+
     record: Dict[str, Any] = {
         "kind": kind,
         "title": title.strip(),

@@ -5,6 +5,8 @@ import {
   CrosshairMode,
   LineSeries,
   createChart,
+  createSeriesMarkers,
+  type SeriesMarker,
   type IChartApi,
   type MouseEventParams,
   type Time,
@@ -27,6 +29,15 @@ export interface LineSeriesInput {
 
 export type ChartValueFormat = "price" | "percent" | "money";
 
+/** Trade marker drawn on the candles (or the first line). Shape + text carry the meaning, not colour. */
+export interface ChartMarker {
+  timestamp: string;
+  side: "buy" | "sell";
+  text?: string;
+}
+
+const NO_MARKERS: ChartMarker[] = [];
+
 interface TimeSeriesChartProps {
   candles?: ChartPoint[];
   lines?: LineSeriesInput[];
@@ -37,6 +48,7 @@ interface TimeSeriesChartProps {
   currency?: string | null;
   /** How values are shown on the axis and in the readout. */
   valueFormat?: ChartValueFormat;
+  markers?: ChartMarker[];
 }
 
 function formatterFor(format: ChartValueFormat, currency?: string | null): (value: number | undefined) => string {
@@ -74,7 +86,7 @@ interface Readout {
  * without colour. The readout above the plot doubles as the legend and lists every series at
  * the hovered time (latest bar otherwise). Times are shown in UTC.
  */
-export function TimeSeriesChart({ candles, lines = NO_LINES, intraday, size = "normal", ariaLabel, currency, valueFormat = "price" }: TimeSeriesChartProps) {
+export function TimeSeriesChart({ candles, lines = NO_LINES, intraday, size = "normal", ariaLabel, currency, valueFormat = "price", markers = NO_MARKERS }: TimeSeriesChartProps) {
   const format = useMemo(() => formatterFor(valueFormat, currency), [valueFormat, currency]);
   const containerRef = useRef<HTMLDivElement>(null);
   const themeVersion = useThemeVersion();
@@ -166,6 +178,21 @@ export function TimeSeriesChart({ candles, lines = NO_LINES, intraday, size = "n
       api.setData(series.data);
       lineApis.set(series.id, api);
     }
+    const markerHost = candleApi ?? lineApis.values().next().value ?? null;
+    if (markerHost && markers.length) {
+      const up = cssVar("--candle-up");
+      const down = cssVar("--candle-down");
+      const seriesMarkers: SeriesMarker<Time>[] = markers
+        .map((marker) => ({
+          time: toTime(marker.timestamp) as Time,
+          position: marker.side === "buy" ? ("belowBar" as const) : ("aboveBar" as const),
+          shape: marker.side === "buy" ? ("arrowUp" as const) : ("arrowDown" as const),
+          color: marker.side === "buy" ? up : down,
+          text: marker.text ?? (marker.side === "buy" ? "B" : "S"),
+        }))
+        .sort((a, b) => (a.time as number) - (b.time as number));
+      createSeriesMarkers(markerHost, seriesMarkers);
+    }
     chart.timeScale().fitContent();
 
     const onMove = (param: MouseEventParams<Time>) => {
@@ -190,7 +217,7 @@ export function TimeSeriesChart({ candles, lines = NO_LINES, intraday, size = "n
       chart.unsubscribeCrosshairMove(onMove);
       chart.remove();
     };
-  }, [candleData, lineData, intraday, themeVersion, valueFormat, format]);
+  }, [candleData, lineData, intraday, themeVersion, valueFormat, format, markers]);
 
   const readoutTime = readout.time
     ? new Date(readout.time * 1000).toLocaleString(undefined, {

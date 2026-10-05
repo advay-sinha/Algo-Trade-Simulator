@@ -8,7 +8,8 @@ from typing import List, Literal
 from fastapi import HTTPException, status
 
 # Tickers like AAPL, BRK-B, RELIANCE.NS, ^GSPC, EURUSD=X. Anything else never reaches Yahoo.
-SYMBOL_PATTERN = r"^[A-Za-z0-9.^=\-]{1,20}$"
+# "&" covers NSE listings such as M&M.NS; symbols are URL-encoded before any outbound request.
+SYMBOL_PATTERN = r"^[A-Za-z0-9.^=&\-]{1,20}$"
 SYMBOL_RE = re.compile(SYMBOL_PATTERN)
 MAX_SYMBOLS_PER_REQUEST = 25
 

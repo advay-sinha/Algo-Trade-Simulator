@@ -7,7 +7,8 @@
     "dev": "vite --config vite.config.ts",
     "build": "vite build --config vite.config.ts",
     "preview": "vite preview --config vite.config.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test:client": "node --test \"client/tests/*.test.ts\""
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",
@@ -15,6 +16,7 @@
     "@radix-ui/react-tabs": "^1.1.21",
     "@radix-ui/react-tooltip": "^1.2.16",
     "lightweight-charts": "^5.2.1",
+    "pdfjs-dist": "^6.4.299",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",

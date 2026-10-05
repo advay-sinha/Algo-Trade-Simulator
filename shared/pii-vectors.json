@@ -1,0 +1,414 @@
+{
+  "about": "Personal-data detector test vectors, read by backend/tests/test_pii.py and client/tests/pii.test.ts so both detectors flag exactly the same values. Every value is synthetic.",
+  "cases": [
+    {
+      "id": "pan-1",
+      "field": "symbol",
+      "value": "ABCPE1234F",
+      "kinds": [
+        "pan"
+      ]
+    },
+    {
+      "id": "pan-lower",
+      "field": "symbol",
+      "value": "abcpe1234f",
+      "kinds": [
+        "pan"
+      ]
+    },
+    {
+      "id": "pan-company",
+      "field": "isin",
+      "value": "AAACR5055K",
+      "kinds": [
+        "pan"
+      ]
+    },
+    {
+      "id": "pan-bad-holder-type",
+      "field": "symbol",
+      "value": "ABCXE1234F",
+      "kinds": []
+    },
+    {
+      "id": "aadhaar-plain",
+      "field": "symbol",
+      "value": "234567890124",
+      "kinds": [
+        "aadhaar"
+      ]
+    },
+    {
+      "id": "aadhaar-spaced",
+      "field": "symbol",
+      "value": "9876 5432 1012",
+      "kinds": [
+        "aadhaar"
+      ]
+    },
+    {
+      "id": "aadhaar-dashed",
+      "field": "symbol",
+      "value": "5000-0000-0006",
+      "kinds": [
+        "aadhaar"
+      ]
+    },
+    {
+      "id": "aadhaar-bad-checksum-is-still-an-account-number",
+      "field": "symbol",
+      "value": "234567890125",
+      "kinds": [
+        "bank_account"
+      ]
+    },
+    {
+      "id": "demat-cdsl",
+      "field": "symbol",
+      "value": "1208160012345678",
+      "kinds": [
+        "demat_id"
+      ]
+    },
+    {
+      "id": "demat-nsdl",
+      "field": "isin",
+      "value": "IN30012345678901",
+      "kinds": [
+        "demat_id"
+      ]
+    },
+    {
+      "id": "bank-11",
+      "field": "symbol",
+      "value": "12345678901",
+      "kinds": [
+        "bank_account"
+      ]
+    },
+    {
+      "id": "bank-18",
+      "field": "symbol",
+      "value": "123456789012345678",
+      "kinds": [
+        "bank_account"
+      ]
+    },
+    {
+      "id": "ifsc",
+      "field": "symbol",
+      "value": "SBIN0001234",
+      "kinds": [
+        "ifsc"
+      ]
+    },
+    {
+      "id": "ifsc-lower",
+      "field": "symbol",
+      "value": "hdfc0000123",
+      "kinds": [
+        "ifsc"
+      ]
+    },
+    {
+      "id": "email",
+      "field": "symbol",
+      "value": "investor.one@example.com",
+      "kinds": [
+        "email"
+      ]
+    },
+    {
+      "id": "phone-plain",
+      "field": "symbol",
+      "value": "9876543210",
+      "kinds": [
+        "phone"
+      ]
+    },
+    {
+      "id": "phone-plus91",
+      "field": "symbol",
+      "value": "+91 98765 43210",
+      "kinds": [
+        "phone"
+      ]
+    },
+    {
+      "id": "phone-91-joined",
+      "field": "symbol",
+      "value": "919876543210",
+      "kinds": [
+        "phone"
+      ]
+    },
+    {
+      "id": "phone-leading-zero",
+      "field": "symbol",
+      "value": "09876543210",
+      "kinds": [
+        "phone"
+      ]
+    },
+    {
+      "id": "upi",
+      "field": "symbol",
+      "value": "investor@okicici",
+      "kinds": [
+        "upi"
+      ]
+    },
+    {
+      "id": "upi-short",
+      "field": "symbol",
+      "value": "ravi.k@ybl",
+      "kinds": [
+        "upi"
+      ]
+    },
+    {
+      "id": "dob-in-symbol",
+      "field": "symbol",
+      "value": "15/08/1990",
+      "kinds": [
+        "date"
+      ]
+    },
+    {
+      "id": "iso-date-in-isin",
+      "field": "isin",
+      "value": "1990-08-15",
+      "kinds": [
+        "date"
+      ]
+    },
+    {
+      "id": "text-date-in-symbol",
+      "field": "symbol",
+      "value": "15 Aug 1990",
+      "kinds": [
+        "date"
+      ]
+    },
+    {
+      "id": "buy-date-is-allowed",
+      "field": "buyDate",
+      "value": "2024-03-15",
+      "kinds": []
+    },
+    {
+      "id": "two-kinds",
+      "field": "symbol",
+      "value": "ABCPE1234F 9876543210",
+      "kinds": [
+        "pan",
+        "phone"
+      ]
+    },
+    {
+      "id": "near-isin-in",
+      "field": "isin",
+      "value": "INE002A01018",
+      "kinds": []
+    },
+    {
+      "id": "near-isin-us",
+      "field": "isin",
+      "value": "US0378331005",
+      "kinds": []
+    },
+    {
+      "id": "near-isin-etf",
+      "field": "isin",
+      "value": "INF204KB14I2",
+      "kinds": []
+    },
+    {
+      "id": "near-ticker-goldbees",
+      "field": "symbol",
+      "value": "GOLDBEES.NS",
+      "kinds": []
+    },
+    {
+      "id": "near-ticker-ampersand",
+      "field": "symbol",
+      "value": "M&M.NS",
+      "kinds": []
+    },
+    {
+      "id": "near-ticker-hyphen",
+      "field": "symbol",
+      "value": "BAJAJ-AUTO.NS",
+      "kinds": []
+    },
+    {
+      "id": "near-ticker-index",
+      "field": "symbol",
+      "value": "^NSEI",
+      "kinds": []
+    },
+    {
+      "id": "near-ticker-us",
+      "field": "symbol",
+      "value": "BRK-B",
+      "kinds": []
+    },
+    {
+      "id": "near-bse-code",
+      "field": "symbol",
+      "value": "500325",
+      "kinds": []
+    },
+    {
+      "id": "near-zerodha-client-id-shape",
+      "field": "symbol",
+      "value": "AB1234",
+      "kinds": []
+    },
+    {
+      "id": "near-short-number",
+      "field": "symbol",
+      "value": "12345678",
+      "kinds": []
+    },
+    {
+      "id": "near-fx",
+      "field": "symbol",
+      "value": "USDINR=X",
+      "kinds": []
+    },
+    {
+      "id": "free-text-date-allowed",
+      "field": "body",
+      "value": "Results due on 15/08/2026; RELIANCE.NS fell 3% on 2026-09-30",
+      "kinds": []
+    },
+    {
+      "id": "free-text-pan-still-caught",
+      "field": "body",
+      "value": "my PAN is ABCPE1234F",
+      "kinds": [
+        "pan"
+      ]
+    },
+    {
+      "id": "chat-phone",
+      "field": "message",
+      "value": "call me on 9876543210 about TCS",
+      "kinds": [
+        "phone"
+      ]
+    }
+  ],
+  "headers": [
+    {
+      "header": "Client ID",
+      "sensitive": true
+    },
+    {
+      "header": "UCC",
+      "sensitive": true
+    },
+    {
+      "header": "Client Code",
+      "sensitive": true
+    },
+    {
+      "header": "DP ID",
+      "sensitive": true
+    },
+    {
+      "header": "BO ID",
+      "sensitive": true
+    },
+    {
+      "header": "Demat Account",
+      "sensitive": true
+    },
+    {
+      "header": "PAN",
+      "sensitive": true
+    },
+    {
+      "header": "Name",
+      "sensitive": true
+    },
+    {
+      "header": "Client Name",
+      "sensitive": true
+    },
+    {
+      "header": "Account Holder",
+      "sensitive": true
+    },
+    {
+      "header": "Email",
+      "sensitive": true
+    },
+    {
+      "header": "Mobile",
+      "sensitive": true
+    },
+    {
+      "header": "Phone Number",
+      "sensitive": true
+    },
+    {
+      "header": "Address",
+      "sensitive": true
+    },
+    {
+      "header": "Date of Birth",
+      "sensitive": true
+    },
+    {
+      "header": "Bank Account",
+      "sensitive": true
+    },
+    {
+      "header": "IFSC",
+      "sensitive": true
+    },
+    {
+      "header": "UPI ID",
+      "sensitive": true
+    },
+    {
+      "header": "Nominee",
+      "sensitive": true
+    },
+    {
+      "header": "Stock Name",
+      "sensitive": false
+    },
+    {
+      "header": "Scheme Name",
+      "sensitive": false
+    },
+    {
+      "header": "Instrument",
+      "sensitive": false
+    },
+    {
+      "header": "Symbol",
+      "sensitive": false
+    },
+    {
+      "header": "ISIN",
+      "sensitive": false
+    },
+    {
+      "header": "Qty.",
+      "sensitive": false
+    },
+    {
+      "header": "Avg. cost",
+      "sensitive": false
+    },
+    {
+      "header": "Company Name",
+      "sensitive": false
+    }
+  ]
+}

@@ -49,6 +49,8 @@ async def create_note(
     try:
         record = await rag.create_note(store, user["id"], payload.kind, payload.title, payload.body, payload.refId, payload.tags)
     except rag.NoteError as exc:
+        if exc.findings:
+            raise HTTPException(status_code=exc.status, detail={"code": "personal_data_detected", "message": exc.message, "findings": exc.findings}) from exc
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
     response.status_code = status.HTTP_201_CREATED if record.pop("_created") else status.HTTP_200_OK
     return public_note(record)

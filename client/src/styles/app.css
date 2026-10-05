@@ -734,6 +734,25 @@ textarea {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+.kv-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: 0;
+}
+.kv-list dt {
+  font-size: var(--text-meta);
+  color: var(--fg-secondary);
+}
+.kv-list dd {
+  margin: 0;
+  font-weight: var(--weight-medium);
+}
+@media (max-width: 480px) {
+  .kv-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -907,6 +926,154 @@ textarea {
 .field .search-field {
   flex: none;
   max-width: none;
+}
+/* Portfolio import preview ------------------------------------------------------------------ */
+.import-table td {
+  vertical-align: top;
+  min-width: 120px;
+}
+.import-table td:first-child,
+.import-table td:last-child {
+  min-width: 0;
+}
+.import-table .input,
+.import-table .select {
+  min-width: 110px;
+}
+.cell-flagged {
+  background: color-mix(in srgb, var(--status-bad) 8%, transparent);
+}
+.row-flagged td {
+  box-shadow: inset 0 -1px 0 var(--status-warn);
+}
+
+/* Bar list (weights): single hue, thin bars, values in text ink ----------------------------- */
+.bar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.bar-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 9rem) minmax(0, 1fr) 3.5rem;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-secondary);
+}
+.bar-list-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bar-list-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-l1);
+}
+.bar-list-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: 4px;
+  background: var(--series-1);
+}
+.bar-list-value {
+  text-align: right;
+  color: var(--fg-secondary);
+}
+.corr-table td,
+.corr-table th {
+  min-width: 64px;
+}
+
+/* Symbol combobox --------------------------------------------------------------------------- */
+.combobox {
+  position: relative;
+}
+.combobox-popup {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  z-index: var(--z-popover);
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+  background: var(--surface-l2);
+  border: 1px solid var(--border-l2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-l3);
+}
+.combobox-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+}
+.combobox-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  justify-content: center;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.combobox-option[aria-selected="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.combobox-option-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-weight: var(--weight-medium);
+}
+.combobox-symbol {
+  font-family: var(--font-mono);
+}
+.combobox-name {
+  font-size: var(--text-meta);
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.combobox-option mark {
+  background: none;
+  color: var(--accent-text);
+  font-weight: var(--weight-semibold, 600);
+}
+.combobox-chip {
+  font-size: var(--text-meta);
+  font-weight: var(--weight-regular, 400);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border-l1);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+.combobox-group {
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--text-meta);
+  color: var(--fg-muted);
+  border-top: 1px solid var(--border-l1);
+  margin-top: var(--space-1);
+}
+.combobox-remote .combobox-option-main {
+  color: var(--accent-text);
+}
+.combobox-note,
+.combobox-footer {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-meta);
+  color: var(--fg-secondary);
+}
+.combobox-footer {
+  border-top: 1px solid var(--border-l1);
+  color: var(--fg-muted);
 }
 .chips {
   display: flex;

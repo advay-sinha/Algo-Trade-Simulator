@@ -238,6 +238,20 @@ async def stream_chat(
     from backend.llm.prompts import SYSTEM_PROMPT
     from backend.llm.tools import ToolContext, build_tools
 
+    from backend.services import pii
+
+    # Chat isn't stored, but it reaches a third-party model provider: personal values are replaced
+    # with placeholders first (the drawer already asked the user to remove them). Kinds/counts only in logs.
+    message, masked_kinds = pii.mask(message)
+    clean_history = []
+    for turn in history:
+        masked_content, turn_kinds = pii.mask(str(turn.get("content", "")))
+        masked_kinds += [kind for kind in turn_kinds if kind not in masked_kinds]
+        clean_history.append({**turn, "content": masked_content})
+    history = clean_history
+    if masked_kinds:
+        logger.info("Copilot message masked: %s", ",".join(masked_kinds))
+
     ctx = ToolContext(user_id=user_id, store=store)
     tools = build_tools(ctx)
     factory = llm_factory or make_llm
@@ -257,7 +271,9 @@ async def stream_chat(
     history_flags = guardrails.detect_in_many(str(t.get("content", "")) for t in history if t.get("role") == "user")
     if flags or history_flags:
         logger.warning("Copilot prompt-injection flags: message=%s history=%s", ",".join(flags) or "-", ",".join(history_flags) or "-")
-    messages.append(SystemMessage(content=guardrails.turn_reminder(flags, history_flags)))
+    messages.append(SystemMessage(content=guardrails.turn_reminder(flags, history_flags, advice=guardrails.asks_for_advice(message), masked=masked_kinds)))
+    if masked_kinds:
+        yield {"type": "masked", "kinds": masked_kinds}
     started: Dict[str, str] = {}
     completed: List[Dict[str, Any]] = []
     try:

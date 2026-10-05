@@ -12,10 +12,11 @@ import { describeError } from "../lib/errors";
 import { formatDate, formatFraction, formatInteger } from "../lib/format";
 import { useAuthed } from "../lib/session";
 import type { DatasetPreview, DatasetPreviewRow, LabelKind, LabelShare } from "../types";
+import { SYMBOL_RE } from "../lib/symbols";
+import { SymbolCombobox } from "../components/ui/SymbolCombobox";
 
 const section = SECTIONS.datasets;
 const featureText = (id: string) => section.features.find((feature) => feature.id === id)?.hoverText ?? "";
-const SYMBOL_RE = /^[A-Za-z0-9.^=-]{1,20}$/;
 const RANGES = [
   { id: "1y", label: "1Y" },
   { id: "2y", label: "2Y" },
@@ -142,7 +143,7 @@ export function DatasetsPage() {
 
   const validate = () => {
     const found: Record<string, string | undefined> = {};
-    if (!SYMBOL_RE.test(symbol.trim())) found.symbol = "Use a ticker like AAPL, BRK-B or RELIANCE.NS.";
+    if (!SYMBOL_RE.test(symbol.trim())) found.symbol = "Pick a match from the list, or type a ticker like AAPL or RELIANCE.NS.";
     const h = Number(horizon);
     if (!Number.isInteger(h) || h < 1 || h > 20) found.horizon = "Use a whole number from 1 to 20.";
     const t = Number(testPct);
@@ -213,13 +214,14 @@ export function DatasetsPage() {
           </div>
         </div>
         <div className="form-row">
-          <div className="field">
-            <label className="field-label" htmlFor="ds-symbol">
-              Symbol
-            </label>
-            <input id="ds-symbol" className="input" value={symbol} maxLength={20} autoCapitalize="characters" onChange={(event) => setSymbol(event.target.value)} {...invalid("symbol")} />
-            {fieldError("symbol")}
-          </div>
+          <SymbolCombobox
+            id="ds-symbol"
+            label="Symbol"
+            value={symbol}
+            onChange={setSymbol}
+            onSelect={setSymbol}
+            error={errors.symbol}
+          />
           <div className="field">
             <label className="field-label" htmlFor="ds-label">
               <LabelWithHint label="Label" term={LABELS.find((item) => item.id === label)?.term ?? "labelDirection"}>

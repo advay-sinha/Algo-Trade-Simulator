@@ -18,9 +18,15 @@ export function describeError(error: unknown, action = "complete that"): string 
       case 409:
         return error.message === "Email already registered"
           ? "An account with this email already exists. Sign in instead, or use a different email."
-          : `That conflicts with existing data, so we couldn't ${action}.`;
-      case 422:
+          : error.message && error.message !== "Conflict"
+            ? error.message
+            : `That conflicts with existing data, so we couldn't ${action}.`;
+      case 422: {
+        // Structured refusals (personal data found, unresolved instruments) carry server-written, value-free copy.
+        const detail = error.detail as { message?: unknown } | undefined;
+        if (detail && typeof detail === "object" && typeof detail.message === "string") return detail.message;
         return `Some values need a second look before we can ${action}. Check the highlighted fields.`;
+      }
       case 429: {
         const wait = error.retryAfter ? ` about ${error.retryAfter} seconds` : " a minute";
         return `Too many attempts in a short time. Wait${wait}, then try again.`;

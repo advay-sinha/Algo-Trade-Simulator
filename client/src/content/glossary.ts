@@ -254,6 +254,59 @@ export const GLOSSARY = {
     term: "Embedding",
     definition: "A list of numbers a language model assigns to a text so that texts with similar meaning end up close together.",
   },
+  unrealizedPnl: {
+    term: "Unrealized P&L",
+    definition: "Gain or loss on the position you still hold: its current market value minus what it cost, including the entry fee. It becomes realized only when the position is sold.",
+    formula: "shares × price × FX − cost basis",
+  },
+  pendingOrder: {
+    term: "Pending order",
+    definition: "The order the strategy will place at the next session's open because its signal changed at the latest close.",
+    caveat: "While the market is open the signal uses today's price so far, so it can still change before the close.",
+  },
+  markToMarket: {
+    term: "Marked to market",
+    definition: "Valuing an open position at the latest available price instead of what was paid for it. Live quotes are used while the market is open; otherwise the last close.",
+  },
+  paperFill: {
+    term: "Simulated fill",
+    definition: "A paper trade: the price the simulation assumes it got, at the session open after the signal, including slippage. No real order is placed.",
+  },
+  fxConversion: {
+    term: "Exchange-rate conversion",
+    definition: "Simulation capital is in rupees. A non-INR instrument is bought and valued with that currency's daily INR rate on each day.",
+    caveat: "Currency moves change the INR result even when the share price doesn't.",
+  },
+  valueAtRisk: {
+    term: "Value at risk (VaR)",
+    definition: "The one-day loss the portfolio, as held today, exceeded on only the worst days of the window — 5% of days at 95% confidence. Measured from history, not a forecast.",
+    formula: "−(5th percentile of daily returns) at 95%",
+    caveat: "Calm windows understate it; it says nothing about how bad the worst days were (see CVaR).",
+  },
+  expectedShortfall: {
+    term: "CVaR (expected shortfall)",
+    definition: "The average loss on the days that were worse than the VaR threshold.",
+    formula: "−mean(daily returns at or below the VaR cut-off)",
+  },
+  hhi: {
+    term: "Concentration (HHI)",
+    definition: "Sum of squared weights. 1 means everything is in one holding; lower means value is spread more evenly.",
+    formula: "Σ weight²; effective holdings = 1 / HHI",
+  },
+  trackingError: {
+    term: "Tracking error",
+    definition: "How far the portfolio's daily returns typically differ from the index's, annualized. Higher means it behaves less like the index.",
+    formula: "stdev(portfolio − index daily returns) × √252",
+  },
+  xirr: {
+    term: "XIRR",
+    definition: "Money-weighted annual return using the purchase dates and costs you entered and today's value.",
+    caveat: "Only holdings with both a purchase date and a cost are included.",
+  },
+  asHeld: {
+    term: "Portfolio as held",
+    definition: "Today's weights applied to each holding's past daily prices. It shows how the current mix would have behaved, not what your account actually did.",
+  },
 } satisfies Record<string, GlossaryEntry>;
 
 export type GlossaryKey = keyof typeof GLOSSARY;

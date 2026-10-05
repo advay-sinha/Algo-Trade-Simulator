@@ -159,6 +159,34 @@ def beta_alpha(
     }
 
 
+def value_at_risk(returns: pd.Series, confidence: float = 0.95) -> Dict[str, Metric]:
+    """Historical one-period VaR and CVaR (expected shortfall) as positive loss fractions.
+
+    VaR = -quantile(returns, 1 - confidence); CVaR = -mean(returns at or below that quantile).
+    A non-positive VaR (no losses in the tail) is reported as 0.
+    """
+    clean = returns.dropna()
+    if not 0.5 < confidence < 1:
+        bad = (None, "Confidence must be between 0.5 and 1")
+        return {"var": bad, "cvar": bad}
+    if len(clean) < MIN_OBSERVATIONS:
+        short = (None, f"Needs at least {MIN_OBSERVATIONS} return observations")
+        return {"var": short, "cvar": short}
+    cutoff = float(np.quantile(clean.to_numpy(), 1 - confidence))
+    tail = clean[clean <= cutoff]
+    var_value = max(0.0, -cutoff)
+    cvar_value = max(0.0, -float(tail.mean())) if len(tail) else var_value
+    return {"var": (_finite(var_value), None), "cvar": (_finite(cvar_value), None)}
+
+
+def tracking_error(portfolio_returns: pd.Series, benchmark_returns: pd.Series, periods_per_year: int) -> Metric:
+    """Annualized standard deviation of the return difference over overlapping periods."""
+    joined = pd.concat([portfolio_returns.rename("p"), benchmark_returns.rename("b")], axis=1, join="inner").dropna()
+    if len(joined) < MIN_OBSERVATIONS:
+        return None, f"Needs at least {MIN_OBSERVATIONS} overlapping return observations"
+    return _finite((joined["p"] - joined["b"]).std(ddof=1) * math.sqrt(periods_per_year)), None
+
+
 def split(metrics: Dict[str, Metric]) -> Tuple[Dict[str, Optional[float]], Dict[str, str]]:
     """{name: (value, reason)} -> ({name: value}, {name: reason for the missing ones})."""
     values = {name: _finite(value) for name, (value, _) in metrics.items()}
@@ -209,6 +237,8 @@ __all__: List[str] = [
     "sharpe",
     "sortino",
     "total_return",
+    "tracking_error",
+    "value_at_risk",
     "volatility",
     "win_rate",
 ]

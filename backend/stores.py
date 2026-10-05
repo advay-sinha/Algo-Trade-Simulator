@@ -83,6 +83,29 @@ def model_summary(record: Dict[str, Any]) -> Dict[str, Any]:
 NOTE_VECTOR_FIELDS = ("id", "title", "body", "kind", "refId", "symbol", "createdAt", "embedding", "embeddingModel")
 
 
+# Simulation fields beyond the base record: the frozen strategy config and lifecycle written by
+# services/simulation_service.py. Anything else passed to the store is dropped.
+SIMULATION_EXTRA_FIELDS = ("params", "config", "startedAt", "statusHistory", "engineVersion", "finalReport")
+SIMULATION_MUTABLE_FIELDS = SIMULATION_EXTRA_FIELDS + ("status", "notes", "strategy")
+
+
+def _simulation_extra(extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return {key: value for key, value in (extra or {}).items() if key in SIMULATION_EXTRA_FIELDS}
+
+
+def _simulation_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: value for key, value in fields.items() if key in SIMULATION_MUTABLE_FIELDS}
+
+
+# Portfolio holdings: only allowlisted, server-resolved instrument fields are ever stored.
+HOLDING_FIELDS = ("symbol", "isin", "schemeCode", "name", "exchange", "currency", "type", "sector", "assetType", "quantity", "avgCost", "buyDate")
+IMPORT_FIELDS = ("source", "rowCount")
+
+
+def _pick(record: Dict[str, Any], fields: tuple) -> Dict[str, Any]:
+    return {key: record.get(key) for key in fields}
+
+
 def public_note(record: Dict[str, Any]) -> Dict[str, Any]:
     """A note without its embedding (vectors never leave the server)."""
     note = {key: value for key, value in record.items() if key not in ("embedding", "userId", "_id")}
@@ -109,6 +132,9 @@ class InMemoryStore:
         self.models: Dict[str, Dict[str, Any]] = {}
         self.artifacts: Dict[str, bytes] = {}
         self.notes: Dict[str, Dict[str, Any]] = {}
+        self.portfolio_imports: Dict[str, Dict[str, Any]] = {}
+        self.holdings: Dict[str, Dict[str, Any]] = {}
+        self.market_flows: Dict[str, Dict[str, Any]] = {}
 
     async def create_user(self, email: str, name: str, password: str) -> Dict[str, Any]:
         async with self.lock:
@@ -188,6 +214,7 @@ class InMemoryStore:
         self,
         user_id: str,
         payload: SimulationInput,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         async with self.lock:
             sim_id = uuid.uuid4().hex
@@ -201,9 +228,24 @@ class InMemoryStore:
                 "status": "active",
                 "notes": payload.notes,
                 "createdAt": now().isoformat(),
-            }
+            } | _simulation_extra(extra)
             self.simulations[sim_id] = record
-            return record
+            return dict(record)
+
+    async def get_simulation(self, user_id: str, sim_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.simulations.get(sim_id)
+            if not record or record["userId"] != user_id:
+                return None
+            return record | {"currency": SIMULATION_CURRENCY}
+
+    async def set_simulation_fields(self, user_id: str, sim_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        async with self.lock:
+            record = self.simulations.get(sim_id)
+            if not record or record["userId"] != user_id:
+                raise KeyError("Simulation not found")
+            record.update(_simulation_fields(fields))
+            return record | {"currency": SIMULATION_CURRENCY}
 
     async def update_simulation(self, user_id: str, sim_id: str, payload: SimulationUpdate) -> Dict[str, Any]:
         async with self.lock:
@@ -315,6 +357,56 @@ class InMemoryStore:
             del self.notes[note_id]
             return True
 
+    async def add_portfolio_import(self, user_id: str, record: Dict[str, Any], holdings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        async with self.lock:
+            import_id = uuid.uuid4().hex
+            created = now().isoformat()
+            stored_import = {"id": import_id, "userId": user_id, "createdAt": created} | _pick(record, IMPORT_FIELDS)
+            self.portfolio_imports[import_id] = stored_import
+            stored = []
+            for holding in holdings:
+                holding_id = uuid.uuid4().hex
+                row = {"id": holding_id, "userId": user_id, "importId": import_id, "createdAt": created} | _pick(holding, HOLDING_FIELDS)
+                self.holdings[holding_id] = row
+                stored.append(dict(row))
+            return {"import": dict(stored_import), "holdings": stored}
+
+    async def list_portfolio(self, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        async with self.lock:
+            imports = sorted((dict(r) for r in self.portfolio_imports.values() if r["userId"] == user_id), key=lambda r: r["createdAt"], reverse=True)
+            holdings = sorted((dict(r) for r in self.holdings.values() if r["userId"] == user_id), key=lambda r: (r["createdAt"], r["id"]))
+        return {"imports": imports, "holdings": holdings}
+
+    async def delete_portfolio_import(self, user_id: str, import_id: str) -> int:
+        async with self.lock:
+            record = self.portfolio_imports.get(import_id)
+            if not record or record["userId"] != user_id:
+                raise KeyError("Import not found")
+            del self.portfolio_imports[import_id]
+            doomed = [key for key, row in self.holdings.items() if row["userId"] == user_id and row["importId"] == import_id]
+            for key in doomed:
+                del self.holdings[key]
+            return len(doomed)
+
+    # Market flows are public market data shared by all users (no user fields).
+    async def upsert_flow_snapshot(self, kind: str, day: str, data: Dict[str, Any], source: str) -> None:
+        async with self.lock:
+            self.market_flows[f"{kind}:{day}"] = {"kind": kind, "date": day, "data": data, "source": source, "storedAt": now().isoformat()}
+
+    async def list_flow_snapshots(self, kind: str, limit: int = 60) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = [dict(record) for record in self.market_flows.values() if record["kind"] == kind]
+        return sorted(records, key=lambda record: record["date"], reverse=True)[:limit]
+
+    async def delete_portfolio(self, user_id: str) -> int:
+        async with self.lock:
+            for key in [key for key, row in self.portfolio_imports.items() if row["userId"] == user_id]:
+                del self.portfolio_imports[key]
+            doomed = [key for key, row in self.holdings.items() if row["userId"] == user_id]
+            for key in doomed:
+                del self.holdings[key]
+            return len(doomed)
+
     async def note_vectors(self, user_id: str, limit: int = 2000) -> List[Dict[str, Any]]:
         async with self.lock:
             records = [r for r in self.notes.values() if r["userId"] == user_id]
@@ -347,6 +439,9 @@ class MongoStore:
         self.backtests = self.db["backtests"]
         self.models = self.db["models"]
         self.notes = self.db["research_notes"]
+        self.portfolio_imports = self.db["portfolio_imports"]
+        self.holdings = self.db["holdings"]
+        self.market_flows = self.db["market_flows"]
         # Model artifacts live in GridFS (never on local disk: serverless filesystems are ephemeral).
         self.artifacts = AsyncIOMotorGridFSBucket(self.db, bucket_name="model_artifacts") if AsyncIOMotorGridFSBucket else None
         self._indexes_ready = False
@@ -364,6 +459,9 @@ class MongoStore:
         await self.models.create_index([("userId", ASCENDING or 1), ("symbol", ASCENDING or 1), ("trainedAt", DESCENDING or -1)])
         await self.notes.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
         await self.notes.create_index([("userId", ASCENDING or 1), ("kind", ASCENDING or 1), ("refId", ASCENDING or 1)])
+        await self.portfolio_imports.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
+        await self.holdings.create_index([("userId", ASCENDING or 1), ("importId", ASCENDING or 1)])
+        await self.market_flows.create_index([("kind", ASCENDING or 1), ("date", DESCENDING or -1)])
         # Sessions created before token hashing stored the raw token (as _id and/or a token
         # field). Those are replayable if leaked, so invalidate them; users simply sign in again.
         legacy = await self.sessions.delete_many(
@@ -400,7 +498,7 @@ class MongoStore:
             "status": document["status"],
             "notes": document.get("notes"),
             "createdAt": document["createdAt"],
-        }
+        } | {key: document[key] for key in SIMULATION_EXTRA_FIELDS if key in document}
 
     @staticmethod
     def _format_training(document: Dict[str, Any]) -> Dict[str, Any]:
@@ -510,7 +608,7 @@ class MongoStore:
             results.append(self._format_simulation(document))
         return results
 
-    async def add_simulation(self, user_id: str, payload: SimulationInput) -> Dict[str, Any]:
+    async def add_simulation(self, user_id: str, payload: SimulationInput, extra: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         sim_id = uuid.uuid4().hex
         record = {
             "_id": sim_id,
@@ -522,9 +620,23 @@ class MongoStore:
             "status": "active",
             "notes": payload.notes,
             "createdAt": now().isoformat(),
-        }
+        } | _simulation_extra(extra)
         await self.simulations.insert_one(record)
         return self._format_simulation(record)
+
+    async def get_simulation(self, user_id: str, sim_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.simulations.find_one({"_id": sim_id, "userId": user_id})
+        return self._format_simulation(document) if document else None
+
+    async def set_simulation_fields(self, user_id: str, sim_id: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+        document = await self.simulations.find_one_and_update(
+            {"_id": sim_id, "userId": user_id},
+            {"$set": _simulation_fields(fields)},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not document:
+            raise KeyError("Simulation not found")
+        return self._format_simulation(document)
 
     async def update_simulation(self, user_id: str, sim_id: str, payload: SimulationUpdate) -> Dict[str, Any]:
         updates: Dict[str, Any] = {}
@@ -670,6 +782,48 @@ class MongoStore:
     async def delete_note(self, user_id: str, note_id: str) -> bool:
         result = await self.notes.delete_one({"_id": note_id, "userId": user_id})
         return result.deleted_count == 1
+
+    @staticmethod
+    def _format_plain(document: Dict[str, Any]) -> Dict[str, Any]:
+        return {"id": str(document["_id"])} | {key: value for key, value in document.items() if key != "_id"}
+
+    async def add_portfolio_import(self, user_id: str, record: Dict[str, Any], holdings: List[Dict[str, Any]]) -> Dict[str, Any]:
+        import_id = uuid.uuid4().hex
+        created = now().isoformat()
+        stored_import = {"_id": import_id, "userId": user_id, "createdAt": created} | _pick(record, IMPORT_FIELDS)
+        rows = [
+            {"_id": uuid.uuid4().hex, "userId": user_id, "importId": import_id, "createdAt": created} | _pick(holding, HOLDING_FIELDS)
+            for holding in holdings
+        ]
+        await self.portfolio_imports.insert_one(stored_import)
+        if rows:
+            await self.holdings.insert_many(rows)
+        return {"import": self._format_plain(stored_import), "holdings": [self._format_plain(row) for row in rows]}
+
+    async def list_portfolio(self, user_id: str) -> Dict[str, List[Dict[str, Any]]]:
+        imports = [self._format_plain(doc) async for doc in self.portfolio_imports.find({"userId": user_id}).sort("createdAt", DESCENDING or -1)]
+        holdings = [self._format_plain(doc) async for doc in self.holdings.find({"userId": user_id}).sort([("createdAt", ASCENDING or 1), ("_id", ASCENDING or 1)])]
+        return {"imports": imports, "holdings": holdings}
+
+    async def delete_portfolio_import(self, user_id: str, import_id: str) -> int:
+        result = await self.portfolio_imports.delete_one({"_id": import_id, "userId": user_id})
+        if result.deleted_count == 0:
+            raise KeyError("Import not found")
+        removed = await self.holdings.delete_many({"userId": user_id, "importId": import_id})
+        return removed.deleted_count
+
+    async def upsert_flow_snapshot(self, kind: str, day: str, data: Dict[str, Any], source: str) -> None:
+        record = {"kind": kind, "date": day, "data": data, "source": source, "storedAt": now().isoformat()}
+        await self.market_flows.update_one({"_id": f"{kind}:{day}"}, {"$set": record}, upsert=True)
+
+    async def list_flow_snapshots(self, kind: str, limit: int = 60) -> List[Dict[str, Any]]:
+        cursor = self.market_flows.find({"kind": kind}, {"_id": 0}).sort("date", DESCENDING or -1).limit(limit)
+        return [document async for document in cursor]
+
+    async def delete_portfolio(self, user_id: str) -> int:
+        await self.portfolio_imports.delete_many({"userId": user_id})
+        removed = await self.holdings.delete_many({"userId": user_id})
+        return removed.deleted_count
 
     async def note_vectors(self, user_id: str, limit: int = 2000) -> List[Dict[str, Any]]:
         projection = {key: 1 for key in NOTE_VECTOR_FIELDS if key != "id"}

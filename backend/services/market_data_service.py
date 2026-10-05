@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import requests
+from urllib.parse import quote
 from fastapi import HTTPException
 
 from backend.config import settings
@@ -198,7 +199,7 @@ def fetch_chart(symbol: str, range_value: str = "1mo", interval: str = "1d") -> 
                 return chart
         except Exception as exc:  # noqa: BLE001
             logger.warning("yfinance chart fetch failed for %s: %s", symbol, exc)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(symbol, safe='^=.-')}"
     params = {
         "range": range_value,
         "interval": interval,
@@ -363,6 +364,15 @@ def build_offline_chart(symbol: str, range_value: str, interval: str) -> Dict[st
 
 
 def build_offline_search(query: str) -> List[Dict[str, Any]]:
+    from backend.services import symbol_catalog
+
+    catalog_hits = symbol_catalog.search(query, limit=10)
+    if catalog_hits:
+        # Real listings from the offline catalog; still flagged so the UI badges them.
+        return [
+            {"symbol": hit["symbol"], "shortName": hit["name"], "longName": hit["name"], "exchange": hit["exchange"], "type": hit["type"], "source": "offline"}
+            for hit in catalog_hits
+        ]
     matches: List[Dict[str, Any]] = []
     lowered = query.lower()
     for symbol, info in OFFLINE_QUOTES.items():

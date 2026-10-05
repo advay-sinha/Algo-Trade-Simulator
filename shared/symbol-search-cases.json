@@ -1,0 +1,154 @@
+{
+  "top1": [
+    [
+      "reliance",
+      "RELIANCE.NS"
+    ],
+    [
+      "reli",
+      "RELIANCE.NS"
+    ],
+    [
+      "ril",
+      "RELIANCE.NS"
+    ],
+    [
+      "tcs",
+      "TCS.NS"
+    ],
+    [
+      "hdfc bank",
+      "HDFCBANK.NS"
+    ],
+    [
+      "sbi",
+      "SBIN.NS"
+    ],
+    [
+      "state bank",
+      "SBIN.NS"
+    ],
+    [
+      "apple",
+      "AAPL"
+    ],
+    [
+      "google",
+      "GOOGL"
+    ],
+    [
+      "alphabet",
+      "GOOGL"
+    ],
+    [
+      "infosys",
+      "INFY.NS"
+    ],
+    [
+      "nifty",
+      "^NSEI"
+    ],
+    [
+      "msft",
+      "MSFT"
+    ],
+    [
+      "microsoft",
+      "MSFT"
+    ],
+    [
+      "l&t",
+      "LT.NS"
+    ],
+    [
+      "m&m",
+      "M&M.NS"
+    ],
+    [
+      "mahindra & mahindra",
+      "M&M.NS"
+    ],
+    [
+      "hul",
+      "HINDUNILVR.NS"
+    ],
+    [
+      "airtel",
+      "BHARTIARTL.NS"
+    ],
+    [
+      "sensex",
+      "^BSESN"
+    ],
+    [
+      "zomato",
+      "ETERNAL.NS"
+    ],
+    [
+      "RELIANCE.NS",
+      "RELIANCE.NS"
+    ],
+    [
+      "aapl",
+      "AAPL"
+    ],
+    [
+      "berkshire",
+      "BRK-B"
+    ],
+    [
+      "relaince",
+      "RELIANCE.NS"
+    ],
+    [
+      "tata consultancy",
+      "TCS.NS"
+    ],
+    [
+      "consultancy tata",
+      "TCS.NS"
+    ],
+    [
+      "bajaj finance",
+      "BAJFINANCE.NS"
+    ],
+    [
+      "bajaj finserv",
+      "BAJAJFINSV.NS"
+    ]
+  ],
+  "top3": [
+    [
+      "infosys",
+      "INFY"
+    ],
+    [
+      "gold etf",
+      "GOLDBEES.NS"
+    ],
+    [
+      "nvidia",
+      "NVDA"
+    ],
+    [
+      "asian paint",
+      "ASIANPAINT.NS"
+    ],
+    [
+      "tata cons",
+      "TCS.NS"
+    ],
+    [
+      "tata cons",
+      "TATACONSUM.NS"
+    ],
+    [
+      "bajaj fin",
+      "BAJFINANCE.NS"
+    ]
+  ],
+  "none": [
+    "zzzzqqq",
+    "xq7"
+  ]
+}

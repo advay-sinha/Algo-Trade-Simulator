@@ -28,6 +28,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
     items: [
       { to: SECTIONS.overview.route, label: SECTIONS.overview.navLabel, icon: "grid", end: true },
       { to: SECTIONS.monitor.route, label: SECTIONS.monitor.navLabel, icon: "activity" },
+      { to: SECTIONS.flows.route, label: SECTIONS.flows.navLabel, icon: "layers" },
     ],
   },
   {
@@ -49,6 +50,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
       { to: SECTIONS.models.route, label: SECTIONS.models.navLabel, icon: "layers" },
       { to: SECTIONS.backtests.route, label: SECTIONS.backtests.navLabel, icon: "activity" },
       { to: SECTIONS.simulations.route, label: SECTIONS.simulations.navLabel, icon: "wallet" },
+      { to: SECTIONS.portfolio.route, label: SECTIONS.portfolio.navLabel, icon: "pie" },
       { to: SECTIONS.research.route, label: SECTIONS.research.navLabel, icon: "database" },
     ],
   },

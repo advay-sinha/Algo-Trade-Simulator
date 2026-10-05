@@ -27,6 +27,13 @@ export function formatSimulationMoney(value: number | null | undefined): string 
   return value.toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 }
 
+/** Signed INR amount for simulation P&L (+₹1,200 / −₹300). */
+export function formatSignedSimulationMoney(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) return DASH;
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "";
+  return `${sign}${formatSimulationMoney(Math.abs(value))}`;
+}
+
 export function formatCompact(value: number | null | undefined): string {
   if (!isFiniteNumber(value)) return DASH;
   return value.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });

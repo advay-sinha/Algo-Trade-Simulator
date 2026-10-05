@@ -17,6 +17,8 @@ COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
 
 COPY backend backend
+# Read-only data shared with the client (symbol catalog, detector vectors).
+COPY shared shared
 
 RUN useradd --create-home --uid 1000 appuser && chown -R appuser /app
 USER appuser

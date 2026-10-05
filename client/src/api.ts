@@ -2,6 +2,19 @@ import type {
   MarketQuote,
   Simulation,
   SimulationInput,
+  SimulationReport,
+  Portfolio,
+  PortfolioHolding,
+  PortfolioImport,
+  ImportRowPayload,
+  PortfolioReportData,
+  InstitutionalFlows,
+  SectorFlows,
+  CompanyCapex,
+  SectorCapex,
+  WhatIfPayload,
+  WhatIfResult,
+  SimulationSummary,
   SimulationUpdate,
   User,
   OverviewResponse,
@@ -96,6 +109,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       typeof detail === "string" ? detail : "Request validation failed",
       response.status,
       response.headers.get("Retry-After"),
+      detail,
     );
   }
 
@@ -108,6 +122,8 @@ export class ApiError extends Error {
     message: string,
     public readonly status: number,
     public readonly retryAfter: string | null = null,
+    /** Raw `detail` from the response body (structured errors such as import findings). */
+    public readonly detail: unknown = undefined,
   ) {
     super(message);
     this.name = "ApiError";
@@ -162,6 +178,18 @@ export function fetchQuote(token: string, symbol: string) {
 
 export function fetchSimulations(token: string) {
   return request<Simulation[]>("/simulations", { token });
+}
+
+export function fetchSimulation(token: string, id: string) {
+  return request<Simulation>(`/simulations/${encodeURIComponent(id)}`, { token });
+}
+
+export function fetchSimulationReport(token: string, id: string) {
+  return request<SimulationReport>(`/simulations/${encodeURIComponent(id)}/report`, { token });
+}
+
+export function fetchSimulationSummaries(token: string) {
+  return request<Record<string, SimulationSummary>>("/simulations/summaries", { token });
 }
 
 export function createSimulation(token: string, payload: SimulationInput) {
@@ -361,4 +389,47 @@ export async function streamCopilot(
       boundary = buffer.indexOf("\n\n");
     }
   }
+}
+
+/* Portfolio (Phase 10): rows only — files are read in the browser and never uploaded. */
+export function fetchPortfolio(token: string) {
+  return request<Portfolio>("/portfolio", { token });
+}
+
+export function importHoldings(token: string, source: string, rows: ImportRowPayload[]) {
+  return request<{ import: PortfolioImport; holdings: PortfolioHolding[] }>("/portfolio/imports", { method: "POST", body: { source, rows }, token });
+}
+
+export function deletePortfolioImport(token: string, importId: string) {
+  return request<void>(`/portfolio/imports/${encodeURIComponent(importId)}`, { method: "DELETE", token });
+}
+
+export function deletePortfolio(token: string) {
+  return request<void>("/portfolio", { method: "DELETE", token });
+}
+
+export function fetchPortfolioReport(token: string, options: { range: string; benchmark: string; confidence: number }) {
+  const params = new URLSearchParams({ range: options.range, benchmark: options.benchmark, confidence: String(options.confidence) });
+  return request<PortfolioReportData>(`/portfolio/report?${params.toString()}`, { token });
+}
+
+export function runPortfolioWhatIf(token: string, payload: WhatIfPayload) {
+  return request<WhatIfResult>("/portfolio/what-if", { method: "POST", body: payload, token });
+}
+
+/* Market intelligence (Phase 11) */
+export function fetchInstitutionalFlows(token: string, days = 60) {
+  return request<InstitutionalFlows>(`/market/flows/institutional?days=${days}`, { token });
+}
+
+export function fetchSectorFlows(token: string, periods = 6, range = "1mo") {
+  return request<SectorFlows>(`/market/flows/sectors?periods=${periods}&range=${encodeURIComponent(range)}`, { token });
+}
+
+export function fetchCompanyCapex(token: string, symbols: string[]) {
+  return request<CompanyCapex[]>(`/fundamentals/capex?symbols=${encodeURIComponent(symbols.join(","))}`, { token });
+}
+
+export function fetchSectorCapex(token: string) {
+  return request<SectorCapex>("/fundamentals/capex/sectors", { token });
 }

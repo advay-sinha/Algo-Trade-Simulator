@@ -1,0 +1,48 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 768 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+36 800 Td
+(CDSL Consolidated Account Statement) Tj T*
+(CAS ID: 98765   Statement for the period 01-09-2026 to 30-09-2026) Tj T*
+(Asha Example) Tj T*
+(PAN: ABCPE1234F) Tj T*
+(12 Example Road, Kothrud, Pune 411038) Tj T*
+(Email: investor.one@example.com   Mobile: 9876543210) Tj T*
+(BO ID: 1208160012345678   DP: EXAMPLE BROKING LIMITED) Tj T*
+(ISIN          Security                 Current Bal   Free Bal   Lock-in Bal   Pledged Bal   Market Price   Value) Tj T*
+(INE009A01021  INFOSYS LIMITED          30.000        30.000     0.000         0.000         1,020.50       30,615.00) Tj T*
+(INE154A01025  ITC LIMITED              100.000       100.000    0.000         0.000         404.25         40,425.00) Tj T*
+(Portfolio Value  71,040.00) Tj T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000121 00000 n 
+0000000247 00000 n 
+0000001066 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R /ID [<2ab29ac1560699782a83c364a10f2eef> <2ab29ac1560699782a83c364a10f2eef>] >>
+startxref
+1163
+%%EOF

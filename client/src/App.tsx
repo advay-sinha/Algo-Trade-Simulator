@@ -17,6 +17,9 @@ const ModelsPage = lazy(() => import("./pages/ModelsPage").then((m) => ({ defaul
 const ModelDetailPage = lazy(() => import("./pages/ModelDetailPage").then((m) => ({ default: m.ModelDetailPage })));
 const BacktestsPage = lazy(() => import("./pages/BacktestsPage").then((m) => ({ default: m.BacktestsPage })));
 const BacktestDetailPage = lazy(() => import("./pages/BacktestDetailPage").then((m) => ({ default: m.BacktestDetailPage })));
+const MarketFlowsPage = lazy(() => import("./pages/MarketFlowsPage").then((m) => ({ default: m.MarketFlowsPage })));
+const PortfolioPage = lazy(() => import("./pages/PortfolioPage").then((m) => ({ default: m.PortfolioPage })));
+const SimulationDetailPage = lazy(() => import("./pages/SimulationDetailPage").then((m) => ({ default: m.SimulationDetailPage })));
 const SimulationsPage = lazy(() => import("./pages/SimulationsPage").then((m) => ({ default: m.SimulationsPage })));
 const HistoryPage = lazy(() => import("./pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
 const PriceHistoryPage = lazy(() => import("./pages/PriceHistoryPage").then((m) => ({ default: m.PriceHistoryPage })));
@@ -78,6 +81,7 @@ function AppRoutes() {
         />
         {[
           { path: "monitor", element: <MonitorPage /> },
+          { path: "flows", element: <MarketFlowsPage /> },
           { path: "engines", element: <EnginesPage /> },
           { path: "engines/:engineId", element: <EngineDetailPage /> },
           { path: "lab", element: <LabPage /> },
@@ -87,6 +91,8 @@ function AppRoutes() {
           { path: "backtests", element: <BacktestsPage /> },
           { path: "backtests/:backtestId", element: <BacktestDetailPage /> },
           { path: "simulations", element: <SimulationsPage /> },
+          { path: "simulations/:simulationId", element: <SimulationDetailPage /> },
+          { path: "portfolio", element: <PortfolioPage /> },
           { path: "research", element: <ResearchPage /> },
           { path: "history", element: <HistoryPage /> },
           { path: "history/prices", element: <PriceHistoryPage /> },

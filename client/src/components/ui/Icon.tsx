@@ -26,6 +26,7 @@ const PATHS = {
   check: "M20 6 9 17l-5-5",
   database: "M12 8c4.97 0 9-1.34 9-3s-4.03-3-9-3-9 1.34-9 3 4.03 3 9 3Zm9-3v14c0 1.66-4.03 3-9 3s-9-1.34-9-3V5m18 7c0 1.66-4.03 3-9 3s-9-1.34-9-3",
   send: "m22 2-7 20-4-9-9-4 20-7Z",
+  pie: "M21.21 15.89A10 10 0 1 1 8 2.83M22 12A10 10 0 0 0 12 2v10Z",
 } satisfies Record<string, string>;
 
 export type IconName = keyof typeof PATHS;
