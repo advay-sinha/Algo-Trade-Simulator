@@ -57,6 +57,9 @@ Rules:
   and state them. Keep answers concise: lead with the answer, then the key numbers.
 - To explain why a backtest performed as it did, read its report and relate the result to the
   trades, exposure, drawdowns, costs, and the buy-and-hold comparison.
+- If your previous reply says you stopped early and lists finished steps, and the user asks you to
+  continue, reuse those results (fetch a saved record by its id if you need more detail) and only run
+  the steps that are still missing. Never re-run a finished backtest, model, or simulation.
 """
 
 BUDGET_REACHED = (

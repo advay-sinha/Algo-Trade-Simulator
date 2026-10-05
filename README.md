@@ -150,7 +150,8 @@ The copilot works with any OpenAI-compatible chat API that supports tool calling
 
 | Provider | Cost | Setup | Default model |
 |---|---|---|---|
-| `groq` | Free tier, no card | Create a key at console.groq.com → `GROQ_API_KEY` | `openai/gpt-oss-120b` (falls back to `openai/gpt-oss-20b`) |
+| `groq` | Free tier, no card | Create a key at console.groq.com → `GROQ_API_KEY` | `openai/gpt-oss-120b` (falls back to `openai/gpt-oss-20b`, then `qwen/qwen3.8-27b`) |
+| `cerebras` | Free tier, larger daily token budget | Create a key at cloud.cerebras.ai → `CEREBRAS_API_KEY` | `gpt-oss-120b` (falls back to `qwen-3.8-27b`) |
 | `openrouter` | Free `:free` models | Create a key at openrouter.ai → `OPENROUTER_API_KEY` | `meta-llama/llama-3.3-70b-instruct:free` |
 | `huggingface` | Small free monthly credits | Access token from huggingface.co → `HF_TOKEN`, plus `LLM_PROVIDER=huggingface` | `Qwen/Qwen2.5-72B-Instruct` |
 | `ollama` | Free, fully local, open source | Install Ollama, `ollama pull qwen2.5:7b`, set `LLM_PROVIDER=ollama` (local development only) | `qwen2.5:7b` |
@@ -158,12 +159,16 @@ The copilot works with any OpenAI-compatible chat API that supports tool calling
 
 | Variable | Description | Default |
 |---|---|---|
-| `LLM_PROVIDER` | One of the providers above | first provider with a key: Groq, then OpenRouter, then OpenAI |
-| `LLM_MODEL` | Override the provider's default model | preset |
-| `LLM_MODEL_FALLBACKS` | Comma-separated backup models tried on rate limits | unset |
-| `LLM_BASE_URL` / `LLM_API_KEY` | Point at any other OpenAI-compatible endpoint | preset |
+| `LLM_PROVIDER` | Primary provider (one of the above) | first provider with a key: Groq, Cerebras, OpenRouter, then OpenAI |
+| `LLM_PROVIDER_FALLBACKS` | Comma-separated providers tried when the primary rate-limits or is down; `none` disables | every free provider with a key (Groq, Cerebras, OpenRouter) |
+| `LLM_MODEL` | Override the primary provider's default model | preset |
+| `<PROVIDER>_MODEL` | Override one provider's preset, e.g. `GROQ_MODEL`, `CEREBRAS_MODEL` | preset |
+| `LLM_MODEL_FALLBACKS` | Comma-separated backup models on the primary provider | preset |
+| `LLM_BASE_URL` / `LLM_API_KEY` | Point the primary provider at any other OpenAI-compatible endpoint | preset |
 | `OLLAMA_BASE_URL` | Ollama endpoint | `http://localhost:11434/v1` |
 | `OPENAI_TEMPERATURE` | Sampling temperature (all providers) | `0.3` |
+
+Free tiers cap tokens per minute per model, and one copilot turn with several tool calls can use a whole minute's budget. When a model rate-limits, the copilot moves to the next model, then the next provider, and skips the limited model until its retry window passes. Adding a second free key (for example Groq plus Cerebras) roughly doubles the headroom. If every provider is limited partway through a multi-step task, the reply lists the steps that already finished (with saved record ids); sending "continue" resumes from there without re-running them. Paid OpenAI and Hugging Face credits are only used as fallbacks when listed in `LLM_PROVIDER_FALLBACKS`.
 
 Without a provider the chat replies with a "not configured" notice; every other feature works.
 

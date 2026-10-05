@@ -248,6 +248,7 @@ def test_missing_fallback_model_does_not_mask_the_rate_limit():
 
     original = copilot_service._models
     copilot_service._models = lambda: ["primary", "bad-fallback", "good"]
+    copilot_service.reset_cooldowns()
     try:
         async def collect():
             return [e async for e in copilot_service.stream_chat("alice", new_store(), "hi", [], llm_factory=PerModel)]
@@ -259,6 +260,50 @@ def test_missing_fallback_model_does_not_mask_the_rate_limit():
         assert next(e for e in events if e["type"] == "error")["message"] == copilot_service.RATE_LIMITED
     finally:
         copilot_service._models = original
+        copilot_service.reset_cooldowns()
+
+
+def test_rate_limited_route_cools_down_and_other_providers_take_over():
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class ServerError(Exception):
+        status_code = 503
+
+    calls = []
+    failing = {"groq::a": RateLimitError("tpm"), "groq::b": ServerError("down")}
+
+    class PerRoute(ScriptedLLM):
+        def __init__(self, route):
+            super().__init__(responses=[AIMessage(content=f"from {route}")])
+            self.route = route
+
+        async def ainvoke(self, messages):
+            calls.append(self.route)
+            if self.route in failing:
+                raise failing[self.route]
+            return await super().ainvoke(messages)
+
+    original = copilot_service._models
+    copilot_service._models = lambda: ["groq::a", "groq::b", "cerebras::c"]
+    copilot_service.reset_cooldowns()
+    try:
+
+        async def collect():
+            return [e async for e in copilot_service.stream_chat("alice", new_store(), "hi", [], llm_factory=PerRoute)]
+
+        events = asyncio.run(collect())
+        assert next(e for e in events if e["type"] == "message")["content"] == "from cerebras::c"
+        assert calls == ["groq::a", "groq::b", "cerebras::c"]
+        calls.clear()
+        del failing["groq::b"]
+        events = asyncio.run(collect())
+        # groq::a is cooling down, so the next healthy route answers without hitting it again.
+        assert next(e for e in events if e["type"] == "message")["content"] == "from groq::b"
+        assert calls == ["groq::b"]
+    finally:
+        copilot_service._models = original
+        copilot_service.reset_cooldowns()
 
 
 def test_price_history_tool_reports_instrument_identity():
@@ -285,3 +330,63 @@ def test_prompt_requires_grounded_figures_and_symbol_resolution():
     assert "search_symbols" in llm.tool_names
     assert "search_symbols" in SYSTEM_PROMPT and ".NS" in SYSTEM_PROMPT
     assert "tool results" in llm.calls[-1][-1].content  # closing reminder repeats the grounding rule
+
+
+def test_rate_limit_mid_task_returns_a_resumable_recap():
+    class RateLimitError(Exception):
+        status_code = 429
+
+    class ToolThenLimited(ScriptedLLM):
+        async def ainvoke(self, messages):
+            if self.responses:
+                return await super().ainvoke(messages)
+            raise RateLimitError("tpm")
+
+    copilot_service.reset_cooldowns()
+    try:
+        events = run("alice", new_store(), "How is my portfolio?", ToolThenLimited([tool_call("portfolio_overview", {}, "o1")]))
+    finally:
+        copilot_service.reset_cooldowns()
+    assert [e["type"] for e in events] == ["tool_start", "tool_end", "message", "error", "done"]
+    recap = next(e for e in events if e["type"] == "message")
+    assert recap["paused"] is True and "portfolio_overview" in recap["content"] and "continue" in recap["content"]
+    assert next(e for e in events if e["type"] == "error")["message"] == copilot_service.RATE_LIMITED
+
+
+def test_non_transient_failure_mid_task_has_no_recap():
+    class AuthenticationError(Exception):
+        status_code = 401
+
+    class ToolThenAuth(ScriptedLLM):
+        async def ainvoke(self, messages):
+            if self.responses:
+                return await super().ainvoke(messages)
+            raise AuthenticationError("bad key")
+
+    events = run("alice", new_store(), "How is my portfolio?", ToolThenAuth([tool_call("portfolio_overview", {}, "o1")]))
+    assert "message" not in [e["type"] for e in events]
+    assert next(e for e in events if e["type"] == "error")["message"] == copilot_service.AUTH_FAILED
+
+
+def test_progress_note_keeps_ids_and_metrics_and_stays_bounded():
+    note = copilot_service.progress_note([
+        {"name": "run_backtest", "args": "symbol=AAPL", "result": {"id": "bt1", "summary": {"totalReturn": 0.123456, "buyHoldReturn": 0.2}, "trades": [1, 2]}},
+    ])
+    assert "run_backtest (symbol=AAPL) -> id=bt1, summary.totalReturn=0.1235, summary.buyHoldReturn=0.2" in note
+    long = copilot_service.progress_note([{"name": f"tool{i}", "args": "x" * 150, "result": {}} for i in range(40)])
+    assert len(long) <= copilot_service.MAX_PROGRESS_CHARS and long.endswith("(recap truncated)")
+
+
+def test_continue_after_pause_tells_the_model_not_to_repeat_finished_steps():
+    recap = copilot_service.progress_note([{"name": "run_backtest", "args": "symbol=AAPL", "result": {"id": "bt1"}}])
+    llm = ScriptedLLM([AIMessage(content="Continuing with MSFT.")])
+
+    async def collect(history):
+        return [e async for e in copilot_service.stream_chat("alice", new_store(), "continue", history, llm_factory=lambda model: llm)]
+
+    asyncio.run(collect([{"role": "user", "content": "Backtest AAPL and MSFT"}, {"role": "assistant", "content": recap}]))
+    sent = [m.content for m in llm.calls[0]]
+    assert sent.index(copilot_service.RESUME_INSTRUCTION) == sent.index("continue") - 1
+    llm.calls.clear()
+    asyncio.run(collect([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello."}]))
+    assert copilot_service.RESUME_INSTRUCTION not in [m.content for m in llm.calls[0]]
