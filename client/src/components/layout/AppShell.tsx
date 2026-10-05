@@ -138,6 +138,7 @@ export function AppShell() {
 
   const sidebarFooter: ReactNode = (
     <div className="sidebar-footer">
+      <span className="workspace-label"><Icon name="shield" /> Paper trading workspace</span>
       <span className="text-meta" style={{ overflowWrap: "anywhere" }}>
         Signed in as {user.email}
       </span>
@@ -158,9 +159,9 @@ export function AppShell() {
           <aside className="sidebar" aria-label="Primary">
             <div className="brand">
               <span className="brand-mark" aria-hidden="true">
-                <Icon name="activity" />
+                <img src="/favicon.svg" alt="" width="34" height="34" />
               </span>
-              Algo Trade Lab
+              <span>Algo Trade Lab<small className="brand-caption">RESEARCH TERMINAL</small></span>
             </div>
             <nav className="stack-lg" aria-label="Sections">
               <NavContent />

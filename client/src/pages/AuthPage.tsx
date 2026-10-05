@@ -89,10 +89,17 @@ export function AuthPage() {
 
   return (
     <div className="auth-wrap">
+      <section className="auth-intro" aria-label="About Algo Trade Lab">
+        <span className="eyebrow">ALGO TRADE LAB / RESEARCH WORKSPACE</span>
+        <h2>Turn market ideas<br />into measured<br /><span>decisions.</span></h2>
+        <p>A focused workspace for strategy research, backtesting, and paper trading.</p>
+        <div className="auth-capabilities"><span><img src="/favicon.svg" alt="" width="34" height="34" /> Backtest strategies</span><span><Icon name="layers" /> Evaluate models</span><span><Icon name="chat" /> Research with copilot</span></div>
+        <div className="auth-footnote"><Icon name="shield" /> Simulated capital. Real learning.</div>
+      </section>
       <main className="auth-card" id="main">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
-            <Icon name="activity" />
+            <img src="/favicon.svg" alt="" width="34" height="34" />
           </span>
           Algo Trade Lab
         </div>
