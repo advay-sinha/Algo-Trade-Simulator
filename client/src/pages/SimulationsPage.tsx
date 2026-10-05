@@ -8,7 +8,7 @@ import { ConfirmDialog, SlideOver } from "../components/ui/overlays";
 import { EmptyState, ErrorState, IconButton, Pagination, SectionHeader, SkeletonRows } from "../components/ui/primitives";
 import { SECTIONS } from "../content/sections";
 import { describeError } from "../lib/errors";
-import { formatDate, formatMoney } from "../lib/format";
+import { formatDate, formatSimulationMoney } from "../lib/format";
 import { useAuthedQuery, useSlashFocus } from "../lib/hooks";
 import { useAuthed } from "../lib/session";
 import type { Simulation, SimulationStatus } from "../types";
@@ -50,6 +50,7 @@ function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation:
         symbol: symbol.trim().toUpperCase(),
         strategy,
         startingCapital: Number(capital),
+        currency: "INR",
         notes: notes.trim() || undefined,
       });
       onCreated(created);
@@ -106,7 +107,7 @@ function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation:
       </div>
       <div className="field">
         <label className="field-label" htmlFor="sim-capital">
-          Starting capital (USD, simulated)
+          Starting capital (INR ₹, simulated)
         </label>
         <input
           id="sim-capital"
@@ -321,7 +322,7 @@ export function SimulationsPage() {
                   <th scope="col">Symbol</th>
                   <th scope="col">Strategy</th>
                   <th scope="col" className="right">
-                    Starting capital
+                    Starting capital (INR)
                   </th>
                   <th scope="col">Status</th>
                   <th scope="col" aria-sort="descending">
@@ -340,7 +341,7 @@ export function SimulationsPage() {
                       {simulation.notes ? <div className="text-meta" style={{ fontWeight: 400 }}>{simulation.notes}</div> : null}
                     </td>
                     <td className="text-secondary">{simulation.strategy}</td>
-                    <td className="right num">{formatMoney(simulation.startingCapital)}</td>
+                    <td className="right num">{formatSimulationMoney(simulation.startingCapital)}</td>
                     <td>
                       <label className="visually-hidden" htmlFor={`status-${simulation.id}`}>
                         Status for {simulation.symbol}

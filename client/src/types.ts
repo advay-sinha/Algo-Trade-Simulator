@@ -19,6 +19,7 @@ export interface MarketQuote {
 }
 
 export interface Simulation {
+  currency: "INR";
   id: string;
   symbol: string;
   strategy: string;
@@ -29,6 +30,7 @@ export interface Simulation {
 }
 
 export interface SimulationInput {
+  currency?: "INR";
   symbol: string;
   strategy: string;
   startingCapital: number;
@@ -150,6 +152,7 @@ export interface SparklinePoint {
 }
 
 export interface SparklineSeries {
+  currency?: string | null;
   symbol: string;
   points: SparklinePoint[];
   source?: DataSource;

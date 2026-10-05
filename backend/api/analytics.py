@@ -129,6 +129,7 @@ async def get_overview(user: Dict[str, Any] = Depends(get_current_user), store: 
         "activeSimulations": active,
         "completedSimulations": completed,
         "totalStartingCapital": total_capital,
+        "currency": "INR",
         "averageStartingCapital": total_capital / capital_samples if capital_samples else 0.0,
         "trainedModels": len(trained),
     }
@@ -192,7 +193,7 @@ async def get_sparkline(
             if "timestamp" in point and "close" in point
         ]
         fallback_symbol = chart.get("symbol", symbol)
-        series.append({"symbol": fallback_symbol, "points": points, "source": chart.get("source", "live")})
+        series.append({"symbol": fallback_symbol, "points": points, "currency": chart.get("currency"), "source": chart.get("source", "live")})
     return series
 
 

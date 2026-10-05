@@ -14,7 +14,7 @@ const SUGGESTIONS = [
   "Backtest AAPL with a 20/60 SMA crossover and 100k capital",
   "Train a gradient boosting model on MSFT and tell me if it beats its baseline",
   "Summarize my simulations",
-  "Create a simulation for NVDA with 25k",
+  "Create a simulation for RELIANCE.NS with INR 25,000",
   "What do my research notes say about drawdowns?",
 ];
 const HISTORY_TURNS = 8;

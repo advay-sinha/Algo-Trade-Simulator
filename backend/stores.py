@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from backend.config import settings
-from backend.models.simulation import SimulationInput, SimulationUpdate
+from backend.models.simulation import SIMULATION_CURRENCY, SimulationInput, SimulationUpdate
 from backend.security import pwd_context
 from backend.services.auth_tokens import generate_session_token, hash_session_token
 from backend.services.clock import now
@@ -180,7 +180,7 @@ class InMemoryStore:
 
     async def list_simulations(self, user_id: str) -> List[Dict[str, Any]]:
         async with self.lock:
-            records = [record for record in self.simulations.values() if record["userId"] == user_id]
+            records = [record | {"currency": SIMULATION_CURRENCY} for record in self.simulations.values() if record["userId"] == user_id]
         # Newest first, matching MongoStore's sort (store parity).
         return sorted(records, key=lambda record: record["createdAt"], reverse=True)
 
@@ -197,6 +197,7 @@ class InMemoryStore:
                 "symbol": payload.symbol.upper(),
                 "strategy": payload.strategy,
                 "startingCapital": float(payload.startingCapital),
+                "currency": SIMULATION_CURRENCY,
                 "status": "active",
                 "notes": payload.notes,
                 "createdAt": now().isoformat(),
@@ -209,6 +210,7 @@ class InMemoryStore:
             record = self.simulations.get(sim_id)
             if not record or record["userId"] != user_id:
                 raise KeyError("Simulation not found")
+            record["currency"] = SIMULATION_CURRENCY
             if payload.status is not None:
                 record["status"] = payload.status
             if payload.notes is not None:
@@ -394,6 +396,7 @@ class MongoStore:
             "symbol": document["symbol"],
             "strategy": document["strategy"],
             "startingCapital": float(document["startingCapital"]),
+            "currency": SIMULATION_CURRENCY,
             "status": document["status"],
             "notes": document.get("notes"),
             "createdAt": document["createdAt"],
@@ -515,6 +518,7 @@ class MongoStore:
             "symbol": payload.symbol.upper(),
             "strategy": payload.strategy,
             "startingCapital": float(payload.startingCapital),
+            "currency": SIMULATION_CURRENCY,
             "status": "active",
             "notes": payload.notes,
             "createdAt": now().isoformat(),
