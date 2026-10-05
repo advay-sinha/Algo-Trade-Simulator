@@ -1,46 +1,63 @@
 // Pattern 1 — List / Index: header + Create, search + one Filters control, framed table, pagination.
-// Create opens a slide-over; delete uses a named confirmation.
+// Each row shows how the paper simulation is doing; the detail page has the full picture.
 import * as Popover from "@radix-ui/react-popover";
 import { useMemo, useRef, useState, type FormEvent } from "react";
-import { createSimulation, deleteSimulation, fetchSimulations, fetchStrategies, updateSimulation } from "../api";
+import { Link, useNavigate } from "react-router-dom";
+import { createSimulation, deleteSimulation, fetchRunnableStrategies, fetchSimulationSummaries, fetchSimulations } from "../api";
+import { Sparkline } from "../components/charts/Sparkline";
 import { Icon } from "../components/ui/Icon";
+import { LabelWithHint } from "../components/ui/InfoHint";
 import { ConfirmDialog, SlideOver } from "../components/ui/overlays";
-import { EmptyState, ErrorState, IconButton, Pagination, SectionHeader, SkeletonRows } from "../components/ui/primitives";
+import { EmptyState, ErrorState, IconButton, Pagination, SectionHeader, Skeleton, SkeletonRows } from "../components/ui/primitives";
 import { SECTIONS } from "../content/sections";
 import { describeError } from "../lib/errors";
-import { formatDate, formatSimulationMoney } from "../lib/format";
-import { useAuthedQuery, useSlashFocus } from "../lib/hooks";
+import { direction, directionArrow, formatDate, formatSignedFraction, formatSignedSimulationMoney, formatSimulationMoney } from "../lib/format";
+import { useAuthedQuery, useSlashFocus, useVisiblePolling } from "../lib/hooks";
 import { useAuthed } from "../lib/session";
-import type { Simulation, SimulationStatus } from "../types";
+import { defaultsFor, toNumbers, validateParam, type ParamValues } from "../lib/strategyParams";
+import type { Simulation, SimulationStatus, SimulationSummary, StrategySpec } from "../types";
+import { SYMBOL_RE } from "../lib/symbols";
+import { SymbolCombobox } from "../components/ui/SymbolCombobox";
 
 const STATUSES: SimulationStatus[] = ["active", "paused", "completed", "archived"];
 const PAGE_SIZE = 10;
-const SYMBOL_RE = /^[A-Za-z0-9.^=-]{1,20}$/;
-const statusText = (status: string) => status.charAt(0).toUpperCase() + status.slice(1);
+const section = SECTIONS.simulations;
+const featureText = (id: string) => section.features.find((feature) => feature.id === id)?.hoverText ?? "";
+export const statusText = (status: string) => status.charAt(0).toUpperCase() + status.slice(1);
 
 function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation: Simulation) => void; onCancel: () => void }) {
   const { token, handleAuthError } = useAuthed();
-  const strategies = useAuthedQuery(() => fetchStrategies(), [], { action: "load strategies" });
+  const strategies = useAuthedQuery(() => fetchRunnableStrategies(), [], { action: "load strategies" });
   const [symbol, setSymbol] = useState("");
-  const [strategy, setStrategy] = useState("sma-crossover");
-  const [capital, setCapital] = useState("10000");
+  const [strategyId, setStrategyId] = useState("sma-crossover");
+  const [params, setParams] = useState<ParamValues | null>(null);
+  const [capital, setCapital] = useState("100000");
   const [notes, setNotes] = useState("");
-  const [errors, setErrors] = useState<{ symbol?: string; capital?: string }>({});
+  const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const check = (field: "symbol" | "capital", value: string) => {
-    if (field === "symbol") return SYMBOL_RE.test(value.trim()) ? undefined : "Use a ticker like AAPL, BRK-B or RELIANCE.NS.";
-    const amount = Number(value);
-    return Number.isFinite(amount) && amount > 0 ? undefined : "Enter an amount above zero.";
+  const strategy: StrategySpec | undefined = strategies.data?.find((item) => item.id === strategyId);
+  const values = params ?? defaultsFor(strategy);
+
+  const check = (field: string, value: string) => {
+    if (field === "symbol") return SYMBOL_RE.test(value.trim()) ? undefined : "Pick a match from the list, or type a ticker like AAPL or RELIANCE.NS.";
+    if (field === "capital") {
+      const amount = Number(value);
+      return Number.isFinite(amount) && amount > 0 ? undefined : "Enter an amount above zero.";
+    }
+    const spec = strategy?.parameters.find((param) => `param-${param.name}` === field);
+    return spec ? validateParam(spec, value) : undefined;
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const found = { symbol: check("symbol", symbol), capital: check("capital", capital) };
+    const found: Record<string, string | undefined> = { symbol: check("symbol", symbol), capital: check("capital", capital) };
+    for (const param of strategy?.parameters ?? []) found[`param-${param.name}`] = validateParam(param, values[param.name] ?? "");
     setErrors(found);
-    if (found.symbol || found.capital) {
-      document.getElementById(found.symbol ? "sim-symbol" : "sim-capital")?.focus();
+    const firstInvalid = Object.entries(found).find(([, message]) => message)?.[0];
+    if (firstInvalid) {
+      document.getElementById(`sim-${firstInvalid}`)?.focus();
       return;
     }
     setBusy(true);
@@ -48,7 +65,8 @@ function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation:
     try {
       const created = await createSimulation(token, {
         symbol: symbol.trim().toUpperCase(),
-        strategy,
+        strategy: strategyId,
+        params: toNumbers(values),
         startingCapital: Number(capital),
         currency: "INR",
         notes: notes.trim() || undefined,
@@ -62,71 +80,100 @@ function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation:
     }
   };
 
+  const invalid = (field: string) => ({
+    "aria-invalid": errors[field] ? true : undefined,
+    "aria-describedby": errors[field] ? `sim-${field}-error` : undefined,
+  });
+  const fieldError = (field: string) =>
+    errors[field] ? (
+      <span className="field-error" id={`sim-${field}-error`}>
+        {errors[field]}
+      </span>
+    ) : null;
+  const update = (field: string, value: string, set: (value: string) => void) => {
+    set(value);
+    if (errors[field] && !check(field, value)) setErrors((previous) => ({ ...previous, [field]: undefined }));
+  };
+
   return (
     <form id="create-simulation" className="form-grid" onSubmit={submit} noValidate>
       {submitError ? <ErrorState message={submitError} /> : null}
-      <div className="field">
-        <label className="field-label" htmlFor="sim-symbol">
-          Symbol
-        </label>
-        <input
-          id="sim-symbol"
-          className="input"
-          value={symbol}
-          maxLength={20}
-          autoCapitalize="characters"
-          aria-invalid={errors.symbol ? true : undefined}
-          aria-describedby={errors.symbol ? "sim-symbol-error" : "sim-symbol-hint"}
-          onChange={(event) => {
-            setSymbol(event.target.value);
-            if (errors.symbol && !check("symbol", event.target.value)) setErrors((previous) => ({ ...previous, symbol: undefined }));
-          }}
-          onBlur={() => setErrors((previous) => ({ ...previous, symbol: check("symbol", symbol) }))}
-        />
-        {errors.symbol ? (
-          <span className="field-error" id="sim-symbol-error">
-            {errors.symbol}
-          </span>
-        ) : (
-          <span className="field-hint" id="sim-symbol-hint">
-            Add the exchange suffix for non-US listings, e.g. RELIANCE.NS
-          </span>
-        )}
-      </div>
+      <SymbolCombobox
+        id="sim-symbol"
+        label="Symbol"
+        value={symbol}
+        onChange={(value) => update("symbol", value, setSymbol)}
+        onSelect={(value) => update("symbol", value, setSymbol)}
+        onBlur={() => setErrors((previous) => ({ ...previous, symbol: check("symbol", symbol) }))}
+        error={errors.symbol}
+        hint="Type a company name or ticker; Indian listings end in .NS"
+      />
       <div className="field">
         <label className="field-label" htmlFor="sim-strategy">
           Strategy
         </label>
-        <select id="sim-strategy" className="select" value={strategy} onChange={(event) => setStrategy(event.target.value)}>
-          {(strategies.data ?? [{ id: "sma-crossover", name: "Simple moving average crossover" }]).map((item) => (
+        <select
+          id="sim-strategy"
+          className="select"
+          value={strategyId}
+          disabled={!strategies.data}
+          onChange={(event) => {
+            setStrategyId(event.target.value);
+            setParams(null);
+            setErrors((previous) => Object.fromEntries(Object.entries(previous).filter(([key]) => !key.startsWith("param-"))));
+          }}
+        >
+          {(strategies.data ?? [{ id: strategyId, name: "Loading…" } as StrategySpec]).map((item) => (
             <option key={item.id} value={item.id}>
               {item.name}
             </option>
           ))}
         </select>
+        {strategy ? <span className="field-hint">{strategy.description}</span> : null}
       </div>
+      {strategies.loading ? (
+        <Skeleton height={44} />
+      ) : (
+        (strategy?.parameters ?? []).map((param) => (
+          <div className="field" key={param.name}>
+            <label className="field-label" htmlFor={`sim-param-${param.name}`}>
+              {param.description ? (
+                <LabelWithHint label={param.label} text={param.description}>
+                  {param.label}
+                </LabelWithHint>
+              ) : (
+                param.label
+              )}
+            </label>
+            <input
+              id={`sim-param-${param.name}`}
+              className="input"
+              inputMode={param.type === "integer" ? "numeric" : "decimal"}
+              value={values[param.name] ?? ""}
+              {...invalid(`param-${param.name}`)}
+              onChange={(event) => update(`param-${param.name}`, event.target.value, (value) => setParams({ ...values, [param.name]: value }))}
+              onBlur={() => setErrors((previous) => ({ ...previous, [`param-${param.name}`]: validateParam(param, values[param.name] ?? "") }))}
+            />
+            {fieldError(`param-${param.name}`)}
+          </div>
+        ))
+      )}
       <div className="field">
         <label className="field-label" htmlFor="sim-capital">
-          Starting capital (INR ₹, simulated)
+          <LabelWithHint label="Rupee budget" text={featureText("inr")}>
+            Starting capital (INR ₹, simulated)
+          </LabelWithHint>
         </label>
         <input
           id="sim-capital"
           className="input"
           inputMode="decimal"
           value={capital}
-          aria-invalid={errors.capital ? true : undefined}
-          aria-describedby={errors.capital ? "sim-capital-error" : undefined}
-          onChange={(event) => {
-            setCapital(event.target.value);
-            if (errors.capital && !check("capital", event.target.value)) setErrors((previous) => ({ ...previous, capital: undefined }));
-          }}
+          {...invalid("capital")}
+          onChange={(event) => update("capital", event.target.value, setCapital)}
           onBlur={() => setErrors((previous) => ({ ...previous, capital: check("capital", capital) }))}
         />
-        {errors.capital ? (
-          <span className="field-error" id="sim-capital-error">
-            {errors.capital}
-          </span>
-        ) : null}
+        {fieldError("capital")}
       </div>
       <div className="field">
         <label className="field-label" htmlFor="sim-notes">
@@ -135,6 +182,7 @@ function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation:
         <textarea id="sim-notes" className="textarea" maxLength={400} value={notes} onChange={(event) => setNotes(event.target.value)} />
         <span className="field-hint">{400 - notes.length} characters left</span>
       </div>
+      <p className="text-meta">Trades start at the next market open. Costs 5 bps and slippage 5 bps per fill, as in backtests.</p>
       <div className="form-actions" style={{ justifyContent: "flex-end" }}>
         <button type="button" className="btn" onClick={onCancel}>
           Cancel
@@ -147,9 +195,57 @@ function CreateSimulationForm({ onCreated, onCancel }: { onCreated: (simulation:
   );
 }
 
+/** Value / P&L / vs-market cells for one row, from its summary. */
+function PerformanceCells({ summary, loading }: { summary?: SimulationSummary; loading: boolean }) {
+  if (!summary) {
+    return (
+      <>
+        <td className="right">{loading ? <Skeleton height={18} width={90} /> : "—"}</td>
+        <td className="right">{loading ? <Skeleton height={18} width={60} /> : "—"}</td>
+        <td>{loading ? <Skeleton height={28} width={110} /> : null}</td>
+        <td />
+      </>
+    );
+  }
+  if (summary.state === "needs_setup" || summary.state === "unavailable" || summary.state === "waiting") {
+    const label = summary.state === "needs_setup" ? "Choose a strategy" : summary.state === "waiting" ? "Starts at next open" : "Prices unavailable";
+    return (
+      <>
+        <td className="right text-secondary" colSpan={3}>
+          {label}
+        </td>
+        <td className="text-secondary">{summary.signal ?? "—"}</td>
+      </>
+    );
+  }
+  const pnlDir = direction(summary.pnl);
+  const excessDir = direction(summary.excessVsBuyHold);
+  return (
+    <>
+      <td className="right num">
+        <div>{formatSimulationMoney(summary.equity)}</div>
+        <div className={`text-meta ${pnlDir}`}>
+          {directionArrow(summary.pnl)} {formatSignedSimulationMoney(summary.pnl)} ({formatSignedFraction(summary.totalReturn)})
+        </div>
+      </td>
+      <td className={`right num ${excessDir}`}>{formatSignedFraction(summary.excessVsBuyHold)}</td>
+      <td style={{ minWidth: 110, maxWidth: 140 }}>
+        <Sparkline points={summary.spark.map((value, index) => ({ timestamp: String(index), close: value }))} label={`Equity trend over ${summary.tradingDays ?? 0} trading days`} />
+      </td>
+      <td>
+        {summary.signal ?? "—"}
+        {summary.pendingSide ? <div className="text-meta">{summary.pendingSide === "buy" ? "Buys" : "Sells"} next open</div> : null}
+      </td>
+    </>
+  );
+}
+
 export function SimulationsPage() {
   const { token, handleAuthError } = useAuthed();
+  const navigate = useNavigate();
   const simulations = useAuthedQuery(fetchSimulations, [], { action: "load simulations" });
+  const summaries = useAuthedQuery(fetchSimulationSummaries, [], { action: "value your simulations" });
+  useVisiblePolling(() => void summaries.reload(), 60_000);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<SimulationStatus[]>([]);
@@ -164,7 +260,7 @@ export function SimulationsPage() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return (simulations.data ?? [])
-      .filter((simulation) => !term || simulation.symbol.toLowerCase().includes(term) || simulation.strategy.toLowerCase().includes(term))
+      .filter((simulation) => !term || simulation.symbol.toLowerCase().includes(term) || (simulation.strategyName ?? simulation.strategy).toLowerCase().includes(term))
       .filter((simulation) => !statusFilter.length || statusFilter.includes(simulation.status as SimulationStatus))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }, [simulations.data, search, statusFilter]);
@@ -172,17 +268,6 @@ export function SimulationsPage() {
   const safePage = Math.min(page, pageCount - 1);
   const visible = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
   const hasFilters = Boolean(search.trim() || statusFilter.length);
-
-  const changeStatus = async (simulation: Simulation, status: SimulationStatus) => {
-    setActionError(null);
-    try {
-      const updated = await updateSimulation(token, simulation.id, { status });
-      simulations.setData((previous) => previous?.map((item) => (item.id === updated.id ? updated : item)) ?? null);
-    } catch (error) {
-      if (handleAuthError(error)) return;
-      setActionError(describeError(error, `update the ${simulation.symbol} simulation`));
-    }
-  };
 
   const confirmDelete = async () => {
     if (!pendingDelete) return;
@@ -210,8 +295,7 @@ export function SimulationsPage() {
   return (
     <div className="page">
       <SectionHeader
-        section={SECTIONS.simulations}
-        showSteps={false}
+        section={section}
         actions={
           <button ref={createButtonRef} type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
             <Icon name="plus" />
@@ -221,6 +305,7 @@ export function SimulationsPage() {
       />
 
       {actionError ? <ErrorState message={actionError} /> : null}
+      {summaries.error ? <ErrorState message={summaries.error} onRetry={() => void summaries.reload()} /> : null}
 
       <section className="table-frame" aria-label="Simulations">
         <div className="toolbar">
@@ -295,7 +380,7 @@ export function SimulationsPage() {
         ) : !simulations.data?.length ? (
           <EmptyState
             title="No simulations yet"
-            body="A simulation tracks one paper-trading idea — a symbol, a strategy, and simulated capital — through its lifecycle."
+            body="A simulation paper-trades one strategy on one symbol from today, and shows how it does against holding the stock and the market."
             action={
               <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
                 <Icon name="plus" />
@@ -322,8 +407,15 @@ export function SimulationsPage() {
                   <th scope="col">Symbol</th>
                   <th scope="col">Strategy</th>
                   <th scope="col" className="right">
-                    Starting capital (INR)
+                    Value (INR)
                   </th>
+                  <th scope="col" className="right">
+                    <LabelWithHint label="vs buy-and-hold" text={featureText("compare")}>
+                      vs hold
+                    </LabelWithHint>
+                  </th>
+                  <th scope="col">Trend</th>
+                  <th scope="col">Signal</th>
                   <th scope="col">Status</th>
                   <th scope="col" aria-sort="descending">
                     Created ↓
@@ -337,33 +429,20 @@ export function SimulationsPage() {
                 {visible.map((simulation) => (
                   <tr key={simulation.id}>
                     <td style={{ fontWeight: 500 }}>
-                      {simulation.symbol}
+                      <Link to={`${section.route}/${simulation.id}`}>{simulation.symbol}</Link>
                       {simulation.notes ? <div className="text-meta" style={{ fontWeight: 400 }}>{simulation.notes}</div> : null}
                     </td>
-                    <td className="text-secondary">{simulation.strategy}</td>
-                    <td className="right num">{formatSimulationMoney(simulation.startingCapital)}</td>
+                    <td className="text-secondary">{simulation.strategyName ?? simulation.strategy}</td>
+                    <PerformanceCells summary={summaries.data?.[simulation.id]} loading={summaries.loading} />
                     <td>
-                      <label className="visually-hidden" htmlFor={`status-${simulation.id}`}>
-                        Status for {simulation.symbol}
-                      </label>
-                      <select
-                        id={`status-${simulation.id}`}
-                        className="select"
-                        style={{ minWidth: 130 }}
-                        value={STATUSES.includes(simulation.status as SimulationStatus) ? simulation.status : ""}
-                        onChange={(event) => void changeStatus(simulation, event.target.value as SimulationStatus)}
-                      >
-                        {!STATUSES.includes(simulation.status as SimulationStatus) ? <option value="">{simulation.status}</option> : null}
-                        {STATUSES.map((status) => (
-                          <option key={status} value={status}>
-                            {statusText(status)}
-                          </option>
-                        ))}
-                      </select>
+                      <span className="status-pill">{statusText(simulation.status)}</span>
                     </td>
                     <td className="text-secondary num">{formatDate(simulation.createdAt)}</td>
                     <td className="right">
-                      <IconButton icon="trash" label={`Delete ${simulation.symbol} simulation`} onClick={() => setPendingDelete(simulation)} />
+                      <div className="cluster" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                        <IconButton icon="chevronRight" label={`Open the ${simulation.symbol} simulation`} onClick={() => navigate(`${section.route}/${simulation.id}`)} />
+                        <IconButton icon="trash" label={`Delete ${simulation.symbol} simulation`} onClick={() => setPendingDelete(simulation)} />
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -378,9 +457,8 @@ export function SimulationsPage() {
         <CreateSimulationForm
           onCancel={() => setCreating(false)}
           onCreated={(simulation) => {
-            simulations.setData((previous) => [simulation, ...(previous ?? [])]);
             setCreating(false);
-            setPage(0);
+            navigate(`${section.route}/${simulation.id}`);
           }}
         />
       </SlideOver>
@@ -389,7 +467,7 @@ export function SimulationsPage() {
         open={Boolean(pendingDelete)}
         onOpenChange={(open) => !open && setPendingDelete(null)}
         title={`Delete the ${pendingDelete?.symbol ?? ""} simulation?`}
-        body="This removes the simulation and its notes permanently. It can't be undone."
+        body="This removes the simulation and its trade history permanently. It can't be undone."
         confirmLabel={`Delete ${pendingDelete?.symbol ?? ""} simulation`}
         onConfirm={() => void confirmDelete()}
         busy={deleting}

@@ -72,8 +72,10 @@ async def copilot_action(payload: CopilotActionRequest, user: Dict[str, Any] = D
         if payload.action == "train_model":
             record = await train_model_for_user(TrainModelRequest(**payload.params), user["id"], store)
             return {"action": payload.action, "id": record["id"], "path": f"/lab/models/{record['id']}", "classification": record["classification"]}
-        simulation = await store.add_simulation(user["id"], SimulationInput(**payload.params))
-        return {"action": payload.action, "id": simulation["id"], "path": "/simulations", "simulation": simulation}
+        from backend.services.simulation_service import create_simulation_for_user
+
+        simulation = await create_simulation_for_user(SimulationInput(**payload.params), user["id"], store)
+        return {"action": payload.action, "id": simulation["id"], "path": f"/simulations/{simulation['id']}", "simulation": simulation}
     except ValidationError as exc:
         first = exc.errors()[0]
         raise HTTPException(status_code=422, detail=f"Invalid {'.'.join(str(p) for p in first.get('loc', ()))}: {first.get('msg')}") from exc

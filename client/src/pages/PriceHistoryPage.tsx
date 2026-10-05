@@ -8,6 +8,8 @@ import { DataSourceBadge, ErrorState, MetricCard, Pagination, SectionHeader, Ske
 import { SECTIONS } from "../content/sections";
 import { formatCompact, formatDate, formatPrice, formatSignedFraction } from "../lib/format";
 import { useAuthedQuery } from "../lib/hooks";
+import { SYMBOL_RE } from "../lib/symbols";
+import { SymbolCombobox } from "../components/ui/SymbolCombobox";
 
 const RANGES = [
   { id: "1mo", label: "1M" },
@@ -17,7 +19,6 @@ const RANGES = [
   { id: "2y", label: "2Y" },
   { id: "5y", label: "5Y" },
 ] as const;
-const SYMBOL_RE = /^[A-Za-z0-9.^=-]{1,20}$/;
 const PAGE_SIZE = 25;
 const section = SECTIONS.prices;
 
@@ -69,7 +70,7 @@ export function PriceHistoryPage() {
     event.preventDefault();
     const next = draft.trim().toUpperCase();
     if (!SYMBOL_RE.test(next)) {
-      setDraftError("Use a ticker like AAPL, BRK-B or RELIANCE.NS.");
+      setDraftError("Pick a match from the list, or type a ticker like AAPL or RELIANCE.NS.");
       return;
     }
     setDraftError(null);
@@ -110,32 +111,26 @@ export function PriceHistoryPage() {
           </div>
         </div>
         <form className="cluster" onSubmit={applySymbol} style={{ alignItems: "flex-end" }} noValidate>
-          <div className="field">
-            <label className="field-label" htmlFor="prices-symbol">
-              Symbol
-            </label>
-            <input
+          <div style={{ flex: "1 1 260px", maxWidth: 360 }}>
+            <SymbolCombobox
               id="prices-symbol"
-              className="input"
-              style={{ width: 180 }}
+              label="Symbol"
               value={draft}
-              maxLength={20}
-              aria-invalid={draftError ? true : undefined}
-              aria-describedby={draftError ? "prices-symbol-error" : undefined}
-              onChange={(event) => {
-                setDraft(event.target.value);
-                if (draftError && SYMBOL_RE.test(event.target.value.trim())) setDraftError(null);
+              onChange={(value) => {
+                setDraft(value);
+                if (draftError && SYMBOL_RE.test(value.trim())) setDraftError(null);
               }}
+              onSelect={(value) => {
+                setDraftError(null);
+                setSymbol(value.toUpperCase());
+                setPage(0);
+              }}
+              error={draftError ?? undefined}
             />
           </div>
           <button type="submit" className="btn btn-primary">
             Show history
           </button>
-          {draftError ? (
-            <span className="field-error" id="prices-symbol-error" style={{ flexBasis: "100%" }}>
-              {draftError}
-            </span>
-          ) : null}
         </form>
       </section>
 

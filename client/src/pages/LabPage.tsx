@@ -11,10 +11,11 @@ import { describeError } from "../lib/errors";
 import { formatDateTime, formatFraction, formatInteger, formatSignedFraction } from "../lib/format";
 import { useAuthed } from "../lib/session";
 import type { PredictionResult, TrainingResult } from "../types";
+import { SYMBOL_RE } from "../lib/symbols";
+import { SymbolCombobox } from "../components/ui/SymbolCombobox";
 
 const section = SECTIONS.lab;
 const featureText = (id: string) => section.features.find((feature) => feature.id === id)?.hoverText ?? "";
-const SYMBOL_RE = /^[A-Za-z0-9.^=-]{1,20}$/;
 
 interface FormState {
   symbol: string;
@@ -26,7 +27,7 @@ function validateForm(form: FormState): Partial<Record<keyof FormState, string>>
   const errors: Partial<Record<keyof FormState, string>> = {};
   const short = Number(form.shortWindow);
   const long = Number(form.longWindow);
-  if (!SYMBOL_RE.test(form.symbol.trim())) errors.symbol = "Use a ticker like AAPL, BRK-B or RELIANCE.NS.";
+  if (!SYMBOL_RE.test(form.symbol.trim())) errors.symbol = "Pick a match from the list, or type a ticker like AAPL or RELIANCE.NS.";
   if (!Number.isInteger(short) || short < 2 || short > 200) errors.shortWindow = "Use a whole number from 2 to 200.";
   if (!Number.isInteger(long) || long < 3 || long > 400) errors.longWindow = "Use a whole number from 3 to 400.";
   else if (!errors.shortWindow && short >= long) errors.longWindow = "Make the long window larger than the short one.";
@@ -126,13 +127,15 @@ export function LabPage() {
           Parameters · SMA crossover
         </h2>
         <div className="form-row">
-          <div className="field">
-            <label className="field-label" htmlFor="lab-symbol">
-              Symbol
-            </label>
-            <input {...fieldProps("symbol")} autoCapitalize="characters" maxLength={20} />
-            {errors.symbol ? <span className="field-error" id="lab-symbol-error">{errors.symbol}</span> : null}
-          </div>
+          <SymbolCombobox
+            id="lab-symbol"
+            label="Symbol"
+            value={form.symbol}
+            onChange={(value) => setField("symbol", value)}
+            onSelect={(value) => setField("symbol", value)}
+            onBlur={() => blurField("symbol")}
+            error={errors.symbol}
+          />
           <div className="field">
             <label className="field-label" htmlFor="lab-shortWindow">
               <LabelWithHint label="Windows" text={featureText("windows")}>

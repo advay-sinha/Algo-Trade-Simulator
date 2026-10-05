@@ -12,6 +12,8 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": resolve(__dirname, "client", "src"),
+      // Read-only data shared with the backend (symbol catalog, detector test vectors).
+      "@shared": resolve(__dirname, "shared"),
     },
   },
   server: {

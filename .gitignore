@@ -16,3 +16,7 @@ AGENTS.md
 CLAUDE.md
 .claude/
 Algo_Trade_Lab_Upgrade_Proposal.docx
+
+# Real CAS statements / broker exports used for local checks: never commit them
+private-statements/
+*.cas.pdf

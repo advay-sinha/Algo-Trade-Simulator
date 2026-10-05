@@ -1,0 +1,2 @@
+# Test fixtures are byte-exact (PDF cross-reference offsets); never convert line endings.
+*.pdf binary

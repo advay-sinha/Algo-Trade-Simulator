@@ -35,16 +35,18 @@ jobs:
         run: python -m pytest backend/tests -q
 
   frontend:
-    name: Frontend type check and build
+    name: Frontend type check, unit tests and build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
       - run: npm ci
       - run: npm run check
+      # Pure client modules (symbol search, PII detectors) under Node's native TypeScript support.
+      - run: npm run test:client
       - run: npm run build
 
   bundle-size:

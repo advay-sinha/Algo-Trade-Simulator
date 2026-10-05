@@ -13,6 +13,9 @@ import { formatDateTime, formatSignedFraction } from "../lib/format";
 import { useAuthedQuery } from "../lib/hooks";
 import { useAuthed } from "../lib/session";
 import type { BacktestRange, BacktestRecord, StrategySpec } from "../types";
+import { defaultsFor, validateParam, type ParamValues } from "../lib/strategyParams";
+import { SYMBOL_RE } from "../lib/symbols";
+import { SymbolCombobox } from "../components/ui/SymbolCombobox";
 
 const section = SECTIONS.backtests;
 const featureText = (id: string) => section.features.find((feature) => feature.id === id)?.hoverText ?? "";
@@ -22,24 +25,8 @@ const RANGES: Array<{ id: BacktestRange; label: string }> = [
   { id: "2y", label: "2Y" },
   { id: "5y", label: "5Y" },
 ];
-const SYMBOL_RE = /^[A-Za-z0-9.^=-]{1,20}$/;
 
-type Values = Record<string, string>;
-
-function defaultsFor(strategy: StrategySpec | undefined): Values {
-  const values: Values = {};
-  for (const param of strategy?.parameters ?? []) values[param.name] = param.default != null ? String(param.default) : "";
-  return values;
-}
-
-function validateParam(spec: StrategySpec["parameters"][number], raw: string): string | undefined {
-  const value = Number(raw);
-  if (raw.trim() === "" || !Number.isFinite(value)) return "Enter a number.";
-  if (spec.type === "integer" && !Number.isInteger(value)) return "Use a whole number.";
-  if (spec.minimum != null && value < spec.minimum) return `Use ${spec.minimum} or more.`;
-  if (spec.maximum != null && value > spec.maximum) return `Use ${spec.maximum} or less.`;
-  return undefined;
-}
+type Values = ParamValues;
 
 export function BacktestsPage() {
   const { token, handleAuthError } = useAuthed();
@@ -69,7 +56,7 @@ export function BacktestsPage() {
 
   const validateAll = () => {
     const found: Record<string, string | undefined> = {};
-    if (!SYMBOL_RE.test(symbol.trim())) found.symbol = "Use a ticker like AAPL, BRK-B or RELIANCE.NS.";
+    if (!SYMBOL_RE.test(symbol.trim())) found.symbol = "Pick a match from the list, or type a ticker like AAPL or RELIANCE.NS.";
     const amount = Number(capital);
     if (!Number.isFinite(amount) || amount <= 0) found.capital = "Enter an amount above zero.";
     for (const [field, raw] of [["costBps", costBps], ["slippageBps", slippageBps]] as const) {
@@ -148,13 +135,14 @@ export function BacktestsPage() {
         </div>
         {strategies.error ? <ErrorState message={strategies.error} onRetry={() => void strategies.reload()} /> : null}
         <div className="form-row">
-          <div className="field">
-            <label className="field-label" htmlFor="bt-symbol">
-              Symbol
-            </label>
-            <input id="bt-symbol" className="input" value={symbol} maxLength={20} autoCapitalize="characters" onChange={(event) => setSymbol(event.target.value)} {...invalid("symbol")} />
-            {fieldError("symbol")}
-          </div>
+          <SymbolCombobox
+            id="bt-symbol"
+            label="Symbol"
+            value={symbol}
+            onChange={setSymbol}
+            onSelect={setSymbol}
+            error={errors.symbol}
+          />
           <div className="field">
             <label className="field-label" htmlFor="bt-strategy">
               Strategy

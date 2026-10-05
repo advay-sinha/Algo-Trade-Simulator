@@ -9,6 +9,7 @@ through the exact same action functions as the UI.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
@@ -90,13 +91,35 @@ class NoteSaveArgs(BaseModel):
 
 class SimulationArgs(BaseModel):
     symbol: str = Field(pattern=SYMBOL_PATTERN)
-    strategy: str = Field(default="sma-crossover", min_length=1, max_length=60)
+    strategy: str = Field(default="sma-crossover", min_length=1, max_length=60, description="Strategy id from list_strategies.")
+    params: Dict[str, float] = Field(default_factory=dict, description="Strategy parameters; omitted ones use defaults.")
     startingCapital: float = Field(gt=0, le=1_000_000_000, description="Paper simulation budget in INR, not the instrument quote currency")
     notes: Optional[str] = Field(default=None, max_length=400)
 
 
 class NoArgs(BaseModel):
     pass
+
+
+class PortfolioArgs(BaseModel):
+    range: Literal["6mo", "1y", "2y", "5y"] = "1y"
+    benchmark: str = Field(default="^NSEI", pattern=SYMBOL_PATTERN, description="Index to compare with, e.g. ^NSEI (Nifty 50) or ^BSESN.")
+
+
+class FlowDaysArgs(BaseModel):
+    days: int = Field(default=20, ge=1, le=120, description="How many recent trading days of flow history to return.")
+
+
+class SectorFlowArgs(BaseModel):
+    periods: int = Field(default=4, ge=1, le=12, description="How many recent fortnightly reports.")
+
+
+class CapexArgs(BaseModel):
+    symbols: List[str] = Field(min_length=1, max_length=5, description="Company tickers, e.g. ['RELIANCE.NS', 'LT.NS'].")
+
+
+class SimulationIdArgs(BaseModel):
+    simulation_id: str = Field(min_length=1, max_length=64, description="Simulation id from portfolio_overview.")
 
 
 def _round(value: Any, digits: int = 4) -> Any:
@@ -205,20 +228,154 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         return _round({"backtests": [{k: item.get(k) for k in ("id", "symbol", "strategy", "range", "summary", "createdAt")} for item in items[:10]]})
 
     async def portfolio_overview() -> Dict[str, Any]:
+        from backend.services import simulation_service
+
         simulations = await ctx.store.list_simulations(ctx.user_id)
         total = sum(float(sim.get("startingCapital") or 0) for sim in simulations)
         by_status: Dict[str, int] = {}
         for sim in simulations:
             by_status[sim.get("status", "unknown")] = by_status.get(sim.get("status", "unknown"), 0) + 1
+        summaries = await simulation_service.summaries_for_user(ctx.user_id, ctx.store)
+        recent = []
+        for sim in simulations[:10]:
+            summary = summaries.get(sim["id"]) or {}
+            recent.append(
+                {k: sim.get(k) for k in ("id", "symbol", "strategy", "startingCapital", "currency", "status", "createdAt")}
+                | {k: summary.get(k) for k in ("state", "equity", "pnl", "totalReturn", "buyHoldReturn", "excessVsBuyHold", "tradingDays", "signal", "pendingSide")}
+            )
         return _round(
             {
                 "simulations": len(simulations),
                 "byStatus": by_status,
                 "totalStartingCapital": total,
                 "currency": "INR",
-                "recent": [{k: sim.get(k) for k in ("symbol", "strategy", "startingCapital", "currency", "status", "createdAt")} for sim in simulations[:10]],
+                "note": "Paper simulations replayed from their start with next-open fills; values in INR.",
+                "recent": recent,
             }
         )
+
+    async def analyze_portfolio(range: str = "1y", benchmark: str = "^NSEI") -> Dict[str, Any]:
+        from backend.services import portfolio_report
+
+        data = await ctx.store.list_portfolio(ctx.user_id)
+        if not data["holdings"]:
+            return {"holdings": 0, "message": "The user hasn't imported any holdings yet (Portfolio page)."}
+        report = await portfolio_report.build_report(data["holdings"], range_name=range, benchmark=benchmark.upper())
+        return _round(portfolio_report.model_summary(report))
+
+    async def get_institutional_flows(days: int = 20) -> Dict[str, Any]:
+        from backend.services import flows_service
+
+        data = await flows_service.institutional(ctx.store, days)
+        cash = data["cash"][-days:]
+        positioning = data["positioning"][-days:]
+        return _round(
+            {
+                "unit": data["unit"],
+                "asOf": data["asOf"],
+                "historySince": data["historySince"],
+                "cash": [{"date": row["date"], "fiiNet": row["fii"]["net"], "diiNet": row["dii"]["net"], "fiiBuy": row["fii"]["buy"], "fiiSell": row["fii"]["sell"], "diiBuy": row["dii"]["buy"], "diiSell": row["dii"]["sell"]} for row in cash],
+                "cashTotals": {"fiiNet": sum(row["fii"]["net"] or 0 for row in cash), "diiNet": sum(row["dii"]["net"] or 0 for row in cash), "days": len(cash)},
+                "positioning": [
+                    {
+                        "date": row["date"],
+                        "fiiIndexFuturesLongPct": round(row["fiiIndexFuturesLongShare"] * 100, 1) if row["fiiIndexFuturesLongShare"] is not None else None,
+                        "fiiIndexFuturesShortPct": round(100 - row["fiiIndexFuturesLongShare"] * 100, 1) if row["fiiIndexFuturesLongShare"] is not None else None,
+                        "indexFuturesNetContracts": row["indexFuturesNet"],
+                    }
+                    for row in positioning
+                ],
+                "note": (
+                    "cash: NSE provisional FII/FPI and DII cash-market activity, INR crore, one row per day (dates are trading days). "
+                    "positioning: NSE participant-wise index-futures open interest. fiiIndexFuturesLongPct is the share of FIIs' own "
+                    "index-futures contracts that are long (the rest are short); indexFuturesNetContracts is long minus short contracts per "
+                    "participant (positive = net long). History starts when the platform began capturing it."
+                ),
+                "available": bool(cash or positioning),
+            }
+        )
+
+    async def get_sector_flows(periods: int = 4) -> Dict[str, Any]:
+        from backend.services import flows_service
+
+        data = await flows_service.sectors(ctx.store, periods)
+        reports = []
+        for report in data["reports"]:
+            ranked = sorted(report["sectors"], key=lambda item: item["netEquity"] or 0)
+            reports.append(
+                {
+                    "date": report["date"],
+                    "period": report["period"],
+                    "totalNetEquity": (report.get("total") or {}).get("netEquity"),
+                    "largestInflows": [{k: item[k] for k in ("sector", "netEquity", "aucShare")} for item in reversed(ranked[-5:])],
+                    "largestOutflows": [{k: item[k] for k in ("sector", "netEquity", "aucShare")} for item in ranked[:5]],
+                }
+            )
+        return _round({"unit": data["unit"], "frequency": data["frequency"], "asOf": data["asOf"], "reports": reports, "sectorIndexReturns": data["indexPerformance"], "performanceRange": data["performanceRange"], "source": "NSDL fortnightly sector-wise FPI data", "available": bool(reports)})
+
+    async def get_company_capex(symbols: List[str]) -> Dict[str, Any]:
+        from backend.services import flows_service
+
+        clean = [symbol.upper() for symbol in symbols if re.match(SYMBOL_PATTERN, symbol)]
+        results = await flows_service.company_capex(clean[:5])
+        out = []
+        for result in results:
+            if result["source"] != "live":
+                out.append({"symbol": result["symbol"], "available": False, "reason": result.get("reason")})
+                continue
+            data = result["data"]
+            currency = data.get("currency") or "INR"
+            scale, unit = (1e7, "INR crore") if currency == "INR" else (1e6, f"{currency} million")
+            years = [
+                {
+                    "fiscalYearEnd": year["fiscalYearEnd"],
+                    "capex": round(year["capex"] / scale, 1),
+                    "operatingCashFlow": round(year["operatingCashFlow"] / scale, 1) if year["operatingCashFlow"] is not None else None,
+                    "revenue": round(year["revenue"] / scale, 1) if year["revenue"] is not None else None,
+                    "capexGrowthPct": round(year["capexGrowth"] * 100, 1) if year.get("capexGrowth") is not None else None,
+                    "capexToRevenuePct": round(year["capexToRevenue"] * 100, 1) if year["capexToRevenue"] is not None else None,
+                    "capexToOperatingCashFlowPct": round(year["capexToOperatingCashFlow"] * 100, 1) if year["capexToOperatingCashFlow"] is not None else None,
+                }
+                for year in data["years"][:4]
+            ]
+            out.append({"symbol": result["symbol"], "name": result.get("name"), "unit": unit, "frequency": "annual", "asOf": result["asOf"], "years": years})
+        return {"companies": out, "note": "Annual figures from reported cash-flow statements; capex is the amount spent (a positive number). Amounts are in the stated unit; *Pct fields are percentages."}
+
+    async def get_sector_capex() -> Dict[str, Any]:
+        from backend.services import flows_service
+
+        data = await flows_service.sector_capex(ctx.store)
+        if data.get("source") == "unavailable":
+            return {"available": False, "reason": data.get("reason")}
+        sectors = [
+            {
+                "sector": item["sector"],
+                "companies": item["companies"],
+                "years": [
+                    {
+                        "fiscalYear": year["fiscalYear"],
+                        "capexCrore": round(year["capex"] / 1e7, 1),
+                        "capexGrowthPct": round(year["capexGrowth"] * 100, 1) if year["capexGrowth"] is not None else None,
+                        "capexToRevenuePct": round(year["capexToRevenue"] * 100, 1) if year["capexToRevenue"] is not None else None,
+                    }
+                    for year in item["years"][:3]
+                ],
+            }
+            for item in data["sectors"]
+        ]
+        return {"asOf": data["asOf"], "universe": data.get("universe"), "coverage": data.get("coverage"), "unit": "INR crore", "frequency": "annual", "sectors": sectors, "note": "Sum of reported annual capex of Nifty 50 companies by sector; growth is shown only when the same companies reported both years."}
+
+    async def get_simulation_report(simulation_id: str) -> Dict[str, Any]:
+        from backend.services import simulation_service
+
+        try:
+            report = await simulation_service.report_for_user(ctx.user_id, simulation_id, ctx.store)
+        except KeyError as exc:
+            raise ActionError("Simulation not found", status=404) from exc
+        keep = ("simulationId", "symbol", "status", "state", "reason", "currency", "startedAt", "strategy", "benchmarkSymbol", "instrument", "fx", "session", "signal", "summary", "position", "metrics", "metricReasons", "mark", "notes", "asOf")
+        compact = {key: report.get(key) for key in keep}
+        compact["recentFills"] = (report.get("trades") or [])[:10]
+        return _round(compact)
 
     async def train_model(**kwargs: Any) -> Dict[str, Any]:
         args = TrainArgs(**kwargs)
@@ -255,13 +412,14 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
             raise ActionError("No trained model found for that request; train one first", status=404)
         return _round(await model_signal_for_user(ctx.store, record))
 
-    async def create_simulation(symbol: str, startingCapital: float, strategy: str = "sma-crossover", notes: Optional[str] = None) -> Dict[str, Any]:
+    async def create_simulation(symbol: str, startingCapital: float, strategy: str = "sma-crossover", params: Optional[Dict[str, float]] = None, notes: Optional[str] = None) -> Dict[str, Any]:
         from backend.models.simulation import SimulationInput  # request model shared with the REST endpoint
+        from backend.services.simulation_service import create_simulation_for_user
 
-        payload = SimulationInput(symbol=symbol.upper(), strategy=strategy, startingCapital=startingCapital, notes=notes)
-        record = await ctx.store.add_simulation(ctx.user_id, payload)
-        ctx.actions.append({"type": "simulation", "id": record["id"], "label": f"Simulation {record['symbol']} · INR {record['startingCapital']:,.0f}", "path": "/simulations"})
-        return {k: record.get(k) for k in ("id", "symbol", "strategy", "startingCapital", "currency", "status", "createdAt")}
+        payload = SimulationInput(symbol=symbol.upper(), strategy=strategy, params=params or {}, startingCapital=startingCapital, notes=notes)
+        record = await create_simulation_for_user(payload, ctx.user_id, ctx.store)
+        ctx.actions.append({"type": "simulation", "id": record["id"], "label": f"Simulation {record['symbol']} · INR {record['startingCapital']:,.0f}", "path": f"/simulations/{record['id']}"})
+        return {k: record.get(k) for k in ("id", "symbol", "strategy", "params", "startingCapital", "currency", "status", "startedAt")}
 
     async def search_research_notes(query: str, k: int = 5) -> Dict[str, Any]:
         from backend.llm import rag
@@ -291,7 +449,13 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         (run_backtest, "run_backtest", "Run AND SAVE a backtest with costs and slippage; returns performance, risk metrics, and benchmark comparison.", BacktestArgs),
         (get_backtest_report, "get_backtest_report", "Full saved report for one backtest (metrics, drawdown, trades, assumptions) — use it to explain results.", BacktestIdArgs),
         (list_backtests, "list_backtests", "The user's most recent saved backtests.", NoArgs),
-        (portfolio_overview, "portfolio_overview", "Summary of the user's paper-trading simulations.", NoArgs),
+        (portfolio_overview, "portfolio_overview", "The user's paper-trading simulations with current value, P&L, return vs buy-and-hold, and latest signal.", NoArgs),
+        (analyze_portfolio, "analyze_portfolio", "Risk and diversification report of the user's real imported holdings: weights by holding, concentration, sector and asset mix, volatility, VaR, drawdown, beta vs an index, and factual observations. No quantities or costs.", PortfolioArgs),
+        (get_institutional_flows, "get_institutional_flows", "FII/FPI and DII cash-market buying and selling (INR crore, daily) and FII/DII/Pro/Client index-futures positioning from NSE, with as-of dates.", FlowDaysArgs),
+        (get_sector_flows, "get_sector_flows", "Sector-wise foreign portfolio (FPI) net equity investment from NSDL's fortnightly reports, plus recent NSE sector index returns.", SectorFlowArgs),
+        (get_company_capex, "get_company_capex", "A company's annual capital expenditure, operating cash flow, revenue, capex growth and capex intensity from reported cash-flow statements.", CapexArgs),
+        (get_sector_capex, "get_sector_capex", "Annual capex summed by sector across Nifty 50 companies, with growth and coverage.", NoArgs),
+        (get_simulation_report, "get_simulation_report", "Full current report for one simulation: position, fills with the rule that fired, pending order, P&L, comparison with buy-and-hold and the benchmark.", SimulationIdArgs),
         (train_model, "train_model", "Train AND REGISTER an ML model; returns unseen-window accuracy vs baseline and a cost-aware backtest vs buy-and-hold.", TrainArgs),
         (get_model_signal, "get_model_signal", "Latest signal from a registered model (by id, or the newest model for a symbol).", SignalArgs),
         (create_simulation, "create_simulation", "Create AND SAVE a paper-trading simulation for the user.", SimulationArgs),

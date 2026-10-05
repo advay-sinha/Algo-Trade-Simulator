@@ -30,6 +30,7 @@ from backend.services import market_data_service as market
 from backend.services.backtesting_service import BacktestConfig, bars_from_points, run_backtest
 from backend.services.clock import now
 from backend.services.feature_service import preview_dataset
+from backend.services import flows_service
 from backend.services.market_data_service import MARKET_HEALTH, build_offline_chart
 from backend.services import rate_limiter
 from backend.services.rate_limiter import rate_limit
@@ -60,6 +61,8 @@ async def system_status(
         "nlp": hf_inference.info() | {"vectorSearch": "atlas" if settings.atlas_vector_index and isinstance(store, MongoStore) else "exact"},
         "offlineMarketDataAllowed": settings.allow_offline_market_data,
         "marketData": dict(MARKET_HEALTH),
+        # Last result per market-intelligence source in this process (no URLs, no error text).
+        "marketFlows": {key: dict(value) for key, value in flows_service.HEALTH.items()},
         "rateLimits": {
             "authPerMinute": settings.auth_rate_limit_per_minute,
             "marketPerMinute": settings.market_rate_limit_per_minute,

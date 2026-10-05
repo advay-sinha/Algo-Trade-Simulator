@@ -1,5 +1,5 @@
 // Pattern 9 — Analytics (operational): range first, filter, KPI strip, primary chart, detail table.
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { fetchChart, fetchWatchlist, searchSymbols } from "../api";
 import { TimeSeriesChart } from "../components/charts/TimeSeriesChart";
 import { Icon } from "../components/ui/Icon";
@@ -18,7 +18,8 @@ import {
 } from "../lib/format";
 import { useAuthedQuery, useVisiblePolling } from "../lib/hooks";
 import { useAuthed } from "../lib/session";
-import type { SearchResult } from "../types";
+import { SYMBOL_RE } from "../lib/symbols";
+import { SymbolCombobox } from "../components/ui/SymbolCombobox";
 
 export const WATCHLIST = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA"];
 
@@ -30,7 +31,6 @@ const RANGES = [
   { id: "1y", label: "1Y", interval: "1d", intraday: false },
 ] as const;
 
-const SYMBOL_RE = /^[A-Za-z0-9.^=-]{1,20}$/;
 const section = SECTIONS.monitor;
 const featureText = (id: string) => section.features.find((feature) => feature.id === id)?.hoverText ?? "";
 
@@ -40,9 +40,6 @@ export function MonitorPage() {
   const [symbol, setSymbol] = useState(WATCHLIST[0]);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[] | null>(null);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [searching, setSearching] = useState(false);
   const range = RANGES.find((item) => item.id === rangeId) ?? RANGES[1];
 
   const symbols = useMemo(() => (WATCHLIST.includes(symbol) ? WATCHLIST : [...WATCHLIST, symbol]), [symbol]);
@@ -72,30 +69,21 @@ export function MonitorPage() {
     };
   }, [chart.data]);
 
-  const runSearch = useCallback(
-    async (event: FormEvent) => {
-      event.preventDefault();
-      const term = query.trim();
-      if (!term) return;
-      setSearching(true);
-      setSearchError(null);
+  const remoteSearch = useCallback(
+    async (term: string) => {
       try {
-        setResults(await searchSymbols(token, term));
+        return await searchSymbols(token, term);
       } catch (error) {
-        if (handleAuthError(error)) return;
-        setSearchError(describeError(error, "search symbols"));
-      } finally {
-        setSearching(false);
+        handleAuthError(error);
+        throw error;
       }
     },
-    [query, token, handleAuthError],
+    [token, handleAuthError],
   );
 
   const choose = (next: string) => {
     if (!SYMBOL_RE.test(next)) return;
     setSymbol(next.toUpperCase());
-    setResults(null);
-    setQuery("");
   };
 
   return (
@@ -126,51 +114,23 @@ export function MonitorPage() {
               ))}
             </div>
           </div>
-          <form className="cluster" onSubmit={runSearch} role="search" style={{ alignItems: "flex-end", flex: "1 1 280px", justifyContent: "flex-end" }}>
-            <label className="field" style={{ flex: "1 1 200px", maxWidth: 320 }}>
-              <span className="field-label">Find a symbol</span>
-              <span className="search-field" style={{ maxWidth: "none" }}>
-                <Icon name="search" />
-                <input className="input" value={query} placeholder="e.g. RELIANCE.NS" onChange={(event) => setQuery(event.target.value)} />
-              </span>
-            </label>
-            <button type="submit" className="btn" disabled={searching}>
-              {searching ? "Searching…" : "Search symbols"}
-            </button>
-          </form>
+          <div style={{ flex: "1 1 280px", maxWidth: 420 }}>
+            <SymbolCombobox
+              id="monitor-symbol"
+              label={
+                <LabelWithHint label="Find a symbol" text={featureText("search")}>
+                  Find a symbol
+                </LabelWithHint>
+              }
+              value={query}
+              onChange={setQuery}
+              onSelect={choose}
+              remoteSearch={remoteSearch}
+              pickOnEnter
+              clearOnSelect
+            />
+          </div>
         </div>
-        {searchError ? <ErrorState message={searchError} /> : null}
-        {results ? (
-          results.length ? (
-            <ul className="list-plain table-frame" aria-label="Search results">
-              {results.slice(0, 8).map((result) => (
-                <li key={result.symbol} className="list-row">
-                  <div className="list-row-main">
-                    <button type="button" className="row-select" onClick={() => choose(result.symbol)}>
-                      {result.symbol}
-                    </button>
-                    <span className="text-meta">
-                      {result.shortName ?? result.longName ?? "Unnamed"} {result.exchange ? `· ${result.exchange}` : ""}
-                    </span>
-                  </div>
-                  <DataSourceBadge source={result.source} />
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="notice">
-              <Icon name="search" />
-              <div className="notice-body">
-                <span>No symbols match “{query}”. Try the ticker (AAPL) or add the exchange suffix (RELIANCE.NS).</span>
-                <div>
-                  <button type="button" className="btn" onClick={() => setResults(null)}>
-                    Clear search
-                  </button>
-                </div>
-              </div>
-            </div>
-          )
-        ) : null}
       </section>
 
       <section aria-label={`${symbol} key figures`} className="kpi-strip">

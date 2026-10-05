@@ -50,7 +50,9 @@ A full-stack quantitative research and trading simulation platform. Users resear
 | Market provenance | Every quote, chart, search result, and sparkline carries `source` (`live` / `offline` / `synthetic`); fallbacks are gated by `ALLOW_OFFLINE_MARKET_DATA`; `/api/status` reports the last observed source per server instance |
 | Copilot | `llm/tools.py` (13 LangChain `StructuredTool`s, incl. `search_symbols` which returns live listings only built per request with the user's id/store in a closure), `llm/langchain_agent.py` (tool-calling loop, 5-call budget, every call answered), `llm/prompts.py` (scope, grounding, symbol-resolution, and instruction-priority rules), `llm/guardrails.py` (regex injection detection over the message, user-authored history, retrieved notes and tool results; `<<untrusted ...>>` fencing of notes and flagged tool output; a closing system reminder after the user turn — flags never block, they add a targeted reminder and a log line without content), `llm/providers.py` (OpenAI-compatible presets: Groq, Cerebras, OpenRouter, Hugging Face, Ollama, OpenAI; `resolve_chain` builds the primary-plus-free-fallback provider chain), `services/copilot_service.py` (model and provider failover on rate limits / outages with per-route cooldowns, a resumable recap of finished tool steps when every provider is exhausted mid-task, SSE event stream, provider-error masking); shared action code in `services/research_actions.py` so REST and tools use one path |
 | Research NLP | `services/hf_inference.py` (hosted Hugging Face inference over REST — no client library; cold-start retry within a 10 s budget, then 503 + Retry-After; optional in-process `local` provider), `services/sentiment_service.py` (label mapping to bullish/bearish/neutral), `llm/rag.py` (note creation incl. backtest/model summaries, embeddings on the documents, stale re-embedding on query, NumPy cosine scan or Atlas `$vectorSearch` filtered by user, copilot context + citations) |
-| Simulations | Per-user CRUD (create / list / patch status+notes / delete) |
+| Market intelligence | `services/market_flows.py` (blocking fetchers + parsers: NSE `fiidiiTradeReact`, NSE participant-wise OI CSV, NSDL fortnightly sector report, yfinance annual cash flows; failures return `source: unavailable` with a generic reason), `services/flows_service.py` (snapshots in `market_flows`, scheduled + throttled on-demand capture, history assembly, Nifty 50 sector capex weekly), `api/flows.py` (reads + `CRON_SECRET`-protected refresh); per-source health in `/api/status` |
+| Portfolio (privacy-first) | `services/pii.py` (detectors, mirrored by `client/src/lib/pii.ts`, both tested on `shared/pii-vectors.json`; `mask()` for chat), `services/portfolio_service.py` (scan raw rows → allowlist schema → resolve via `symbol_catalog` / `amfi` / live quote → store holding fields only; any finding refuses the whole import), `services/portfolio_report.py` + `analytics/portfolio.py` (value, concentration, mix, portfolio-as-held risk, VaR/CVaR, beta, tracking error, correlation, XIRR, what-if, stress, factual observations), `services/amfi.py` (AMFI NAV file; fund NAV history from the public mfapi.in mirror). `api/errors.py`: validation errors never echo input |
+| Simulations | `services/simulation_service.py` — forward paper trading computed on read: frozen strategy config, deterministic replay from the start time (next-session-open fills, warm-up bars never trade, paused days place no orders), live mark-to-market, daily FX for non-INR instruments, buy-and-hold and benchmark comparison, final report frozen on completion |
 
 
 ## 3. Frontend (`client/src/`)
@@ -60,23 +62,26 @@ A section-based research console. Every page follows the same anatomy: a summary
 | Route | Section | Layout |
 |---|---|---|
 | `/` | Overview | Dashboard: key figures, watchlist trends, recent simulations, section directory |
-| `/monitor` | Live monitoring | Range + symbol filters, key figures, candlestick chart, 30-second quote table |
+| `/monitor` | Live monitoring | Range filter, type-ahead symbol search (offline catalog, Yahoo as an explicit fallback), key figures, candlestick chart, 30-second quote table |
 | `/engines`, `/engines/:id` | Engines | Engine list; each engine has Overview / Workbench (or "What's coming") / Glossary tabs |
 | `/lab` | Training · testing · validation | Parameters → run → metrics, price-with-averages chart, validation status, signal |
 | `/lab/datasets` | Dataset builder | Parameters + feature groups → shape, split timeline (train / embargo / test), label balance, train-set feature stats, first/last rows |
 | `/lab/models`, `/lab/models/:id` | Model lab | Train form → honest verdict, KPIs vs baseline, split timeline, test-window backtest vs buy-and-hold, confusion matrix, per-class table; registry with live signals; detail page (Report / Signal / Configuration) |
 | `/backtests`, `/backtests/:id` | Backtests | Run form → KPIs, equity vs buy-and-hold vs benchmark, drawdown, risk report, trade log, assumptions; saved runs open in a tabbed detail page (Performance / Risk / Trades / Assumptions) |
-| `/simulations` | Simulations | Searchable, filterable table; create in a slide-over; named delete confirmation |
+| `/simulations` | Simulations | Table with value, P&L, vs-hold, equity sparkline and signal per simulation; create (strategy + parameters) in a slide-over; named delete confirmation |
+| `/flows` | Market flows | FII / DII cash KPIs, cumulative chart, positioning chart and daily table; sector FPI flows table with recent fortnights and sector index returns; company capex lookup and Nifty 50 sector capex |
+| `/portfolio` | Portfolio | Import flow (checklist → CSV or manual → column map → preview with personal-data flags → upload), holdings by import with hard delete, report (KPIs, observations, weights, sector/asset mix, growth vs index, drawdown, correlation, what-if/stress, positions with price sources) |
+| `/simulations/:id` | Simulation detail | KPIs, signal and pending order, position, value vs hold vs index chart, price chart with fill markers, fills with reasons, risk metrics, assumptions; pause / resume / complete |
 | `/history`, `/history/prices` | History | Research records list; daily price history with chart, table, and CSV export |
 | `/safety` | Safety | Data integrity, research honesty, account & access, known limitations |
 
 | Folder | Role |
 |---|---|
 | `content/` | `sections.ts` (every section/engine: summary, steps, features, status, phase) and `glossary.ts` (metric definitions and formulas) — pages render from these |
-| `components/ui/` | Primitives: section header, info hints, status pills, metric cards, data-source badges, states, slide-over, confirm dialog, icon buttons, pagination |
+| `components/ui/` | Primitives: section header, info hints, status pills, metric cards, data-source badges, states, slide-over, confirm dialog, icon buttons, pagination, `SymbolCombobox` (accessible type-ahead used by every symbol field) |
 | `components/charts/` | Lightweight Charts wrapper (candles + lines, value readout/legend, UTC times) and SVG sparklines |
 | `components/layout/` | App shell: sidebar navigation (menu drawer on narrow screens), status strip, theme toggle, copilot drawer |
-| `lib/` | Session context, data hooks (stale-response protection, visibility-aware polling), formatters, recovery-oriented error copy, theme |
+| `lib/` | `cas.ts` (pdf.js reader, lazy chunk, same-origin worker, no WebAssembly) + `casParse.ts` (line grouping; rows built only from validated ISINs and the numbers beside them — quantity × price = value for demat, unit balance / cost value for funds; totals check), `pii.ts`, `csv.ts`, `portfolioImport.ts`, `symbolSearch.ts` (pure ranking over the offline catalog: ticker, alias, name prefix, any-order tokens, initials, one-typo tolerance), `useSymbolCatalog.ts` (lazy chunk loaded on first focus), `symbols.ts` (shared ticker pattern), session context, data hooks (stale-response protection, visibility-aware polling), formatters, recovery-oriented error copy, theme |
 | `styles/` | Design tokens for light and dark themes; component styles |
 
 Routes are code-split; the charting library loads only on pages with charts. All HTTP goes through `api.ts`.
@@ -87,12 +92,15 @@ Routes are code-split; the charting library loads only on pages with charts. All
 |---|---|
 | `users` | `_id`, `email` (unique), `name`, `password_hash`, `createdAt` |
 | `sessions` | `_id` = SHA-256 of the token (`tokenHash`), `userId`, `expiresAt` (TTL-indexed in Mongo) |
-| `simulations` | `_id`, `userId`, `symbol`, `strategy`, `startingCapital`, `status`, `notes`, `createdAt` |
+| `simulations` | `_id`, `userId`, `symbol`, `strategy` (registry id), `params`, `config` (costBps, slippageBps, benchmark), `startingCapital` (INR), `status`, `statusHistory`, `startedAt`, `engineVersion`, `finalReport` (completed only), `notes`, `createdAt` |
 | `training` | `_id` = `userId:SYMBOL` (one record per user+symbol), `strategy_id`, `payload` (full training result), `trained_at` |
 | `backtests` | `_id`, `userId`, `symbol`, `strategy` {id, name, params}, `range`, `config` (capital, costs, slippage), `period`, `summary`, `equity` / `drawdown` / `buyHold` series (≤ 2,000 points each), `trades`, `assumptions`, `risk` (stored risk report), `benchmarkEquity`, `dataSource`, `createdAt` |
 
 | `models` | `_id`, `userId`, `symbol`, `modelType`, `hyperparams`, `featureConfig`, `featureNames`, `label`, `range`, `split`, `labelDistribution`, `classification`, `strategy` (test-window backtest), `artifactId` (GridFS `model_artifacts` bucket), `artifactBytes`, `tracking`, `trainedAt` |
 
+| `market_flows` | `_id` = `kind:date`, `kind` (fii_dii_cash / participant_oi / fpi_sector / sector_capex), `date`, `data`, `source`, `storedAt` — public market data, no user fields; indexed on (kind, date) |
+| `portfolio_imports` | `_id`, `userId`, `source`, `rowCount`, `createdAt` |
+| `holdings` | `_id`, `userId`, `importId`, `symbol`, `isin`, `schemeCode`, `name`, `exchange`, `currency`, `type`, `sector`, `assetType`, `quantity`, `avgCost`, `buyDate`, `createdAt` — allowlisted fields only; names/exchanges are looked up server-side |
 | `research_notes` | `_id`, `userId`, `kind` (note / backtest / model), `title`, `body`, `refId`, `symbol`, `tags`, `sentiment` {label, confidence, scores}, `embedding` (float list), `embeddingModel`, `createdAt` — indexed on (userId, createdAt) and (userId, kind, refId) |
 
 ## 5. API surface
@@ -108,7 +116,8 @@ All routes are prefixed with `/api`.
 | `POST /dev/auth/bypass` | Dev-only login bypass (`ENABLE_DEV_ENDPOINTS`, never in production) | — |
 | `GET /market/watchlist`, `GET /market/quote/{symbol}` | Live quotes (rate limited) | ✓ |
 | `GET /market/search?q=`, `GET /market/chart/{symbol}` | Search, OHLCV charts | ✓ |
-| `GET/POST /simulations`, `PATCH/DELETE /simulations/{id}` | Simulation CRUD (status: active / paused / completed / archived) | ✓ |
+| `GET/POST /simulations`, `PATCH/DELETE /simulations/{id}` | Simulation CRUD; validated lifecycle (active ⇄ paused → completed → archived) | ✓ |
+| `GET /simulations/{id}`, `GET /simulations/{id}/report`, `GET /simulations/summaries` | One simulation, its live evaluation, card summaries | ✓ |
 | `GET /analytics/overview`, `GET /analytics/sparkline`, `GET /analytics/training` | Dashboard aggregates, mini price series, past training runs | ✓ |
 | `GET /status` | Operational snapshot for the console (no secrets) | ✓ |
 | `GET /strategies` | Runnable strategies with parameter schemas | — |
@@ -140,6 +149,9 @@ All routes are prefixed with `/api`.
 | 7 | NLP research memory — FinBERT sentiment, embeddings stored on MongoDB documents, user-scoped retrieval (NumPy or Atlas Vector Search), copilot citations | Done |
 | 8 | Production hardening — route modules, API + unit tests, CI, shared Redis cache and rate limits, structured logging, pinned dependencies, deployed-size budget, Docker Compose | Done |
 | 9 | Cloud deployment — one Vercel project: static frontend + FastAPI as a Python function (`api/index.py`) under `/api`, region `bom1` next to MongoDB Atlas, deployment smoke test | Done — live at algo-trade-simulator-lovat.vercel.app |
+| 10 | Portfolio analysis of real holdings — offline symbol catalog + company-name type-ahead; personal-data detectors and allowlist import (reject, never store); in-browser CAS reader (pdf.js, NSDL/CDSL/CAMS/KFintech, totals check); portfolio risk report with what-if/stress; copilot `analyze_portfolio` (aggregates only), chat masking, note refusal, no-advice rule | Done (optional read-only broker sync not built) |
+| 11 | Market intelligence data — FII/DII cash flows, participant-wise derivatives positioning, sector-wise FPI flows, sector index performance, company and sector capex, with daily capture and copilot tools | Done |
+| 12 | Live paper-trading simulations — deterministic forward replay with next-open fills, live mark-to-market, FX for non-INR listings, buy-and-hold and index comparison, lifecycle with frozen final reports | Done |
 
 Build order rationale: make the finance core credible first (backtesting → risk), then ML workflows, then LLM/NLP as supporting intelligence layers, then packaging and deployment. The interactive console comes early so every engine ships its UI into one consistent design system.
 
@@ -191,7 +203,12 @@ No `.env` file is required to start; defaults run the whole app in development m
 - **Fallback data during outages** — when Yahoo is unreachable, quotes/charts/search fall back to reference or synthetic values. They are always flagged in the payload and badged in the interface, but they are not real prices.
 - **Store fallback outside strict mode** — without `STRICT_DB`, an unreachable MongoDB makes the server log a warning and run in-memory; data appears to save but vanishes on restart. Strict mode is on by default in hosted deployments.
 - **Sentiment reads wording, not markets** — FinBERT scores the tone of text; it is not a return forecast, and generated backtest/model summaries are not scored.
-- **Long/flat only** — backtests hold either a full long position or cash; no shorting, leverage, or position scaling yet.
+- **Long/flat only** — backtests and simulations hold either a full long position or cash; no shorting, leverage, or position scaling yet.
+- **Portfolio report** — risk figures describe the current mix applied to past prices ("as held"), not the account's actual history; holdings with under 60% price coverage in the window are left out of the risk figures and listed; US listings have no sector tag; fund history comes from a public AMFI mirror; at most 100 holdings per import.
+- **Market-flow sources** — NSE and NSDL are public websites, not APIs: NSE may refuse requests from cloud servers and NSDL is sometimes slow, so data can be unavailable on a given day (reported as such). FII/DII cash history exists only from the day capture started; positioning and sector reports can be backfilled. Yahoo has price history for only a few NSE sector indices. Capex is annual and lags by months.
+- **CAS layouts** — the reader targets the NSDL / CDSL eCAS and CAMS / KFintech CAS layouts and is tested on synthetic statements in those formats; a layout it can't read is reported and the CSV route offered. Demat statements show market value, not cost, so P&L and XIRR need costs entered in the preview.
+- **Personal-data detection** — pattern and checksum based (PAN, Aadhaar, demat/BO, bank account, IFSC, email, phone, UPI, and dates in structured fields); names and addresses can't be pattern-matched and are excluded structurally (no free-text field, unmatched columns never uploaded).
+- **Simulation sessions** — simulations use regular exchange hours for NSE, NYSE/Nasdaq and London and don't model exchange holidays; fills use daily bars (next session open), not intraday prices. Up to 20 running simulations are valued on the list page per request.
 - **No browser end-to-end tests in CI** — CI runs the backend unit and API tests plus the frontend type check and build; interface checks are run manually.
 - **Rate limits are per process without Redis** — when Upstash isn't configured, each server instance counts separately; with Redis unreachable, limits fail open.
 - **Untyped responses** — request bodies are Pydantic models, but most responses are plain dictionaries, so the OpenAPI schema doesn't describe response shapes and frontend types are maintained by hand.

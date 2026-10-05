@@ -18,14 +18,27 @@ export interface MarketQuote {
   source?: DataSource;
 }
 
+export interface SimulationStatusChange {
+  status: SimulationStatus;
+  at: string;
+}
+
 export interface Simulation {
   currency: "INR";
   id: string;
   symbol: string;
+  /** Registry strategy id (older records may hold free text until set up). */
   strategy: string;
+  strategyName?: string;
+  params?: Record<string, number>;
+  config?: { costBps: number; slippageBps: number; benchmark: string };
   startingCapital: number;
   status: string;
   createdAt: string;
+  startedAt?: string;
+  statusHistory?: SimulationStatusChange[];
+  /** "needs_setup" = saved before strategies were tracked; choose one to start tracking. */
+  tracking?: "tracked" | "needs_setup";
   notes?: string | null;
 }
 
@@ -33,7 +46,11 @@ export interface SimulationInput {
   currency?: "INR";
   symbol: string;
   strategy: string;
+  params?: Record<string, number>;
   startingCapital: number;
+  costBps?: number;
+  slippageBps?: number;
+  benchmark?: string;
   notes?: string;
 }
 
@@ -43,6 +60,107 @@ export type SimulationStatus = "active" | "paused" | "completed" | "archived";
 export interface SimulationUpdate {
   status?: SimulationStatus;
   notes?: string | null;
+  strategy?: string;
+  params?: Record<string, number>;
+}
+
+export type SimulationState = "ok" | "waiting" | "needs_setup" | "unavailable";
+
+export interface SimulationSummary {
+  state: SimulationState;
+  reason?: string | null;
+  equity: number | null;
+  pnl: number | null;
+  totalReturn: number | null;
+  buyHoldReturn: number | null;
+  excessVsBuyHold: number | null;
+  tradingDays: number | null;
+  signal?: "Long" | "Flat" | null;
+  pendingSide?: "buy" | "sell" | null;
+  spark: number[];
+  asOf: string;
+}
+
+export interface SimulationFill {
+  side: "buy" | "sell";
+  time: string;
+  date: string;
+  barTime: string;
+  /** Instrument currency, slippage included. */
+  price: number;
+  shares: number;
+  fxRate: number;
+  /** INR. */
+  notional: number;
+  cost: number;
+  reason: string;
+  pnl?: number;
+  returnPct?: number | null;
+}
+
+export interface SimulationReport {
+  simulationId: string;
+  symbol: string;
+  status: string;
+  state: SimulationState;
+  reason: string | null;
+  currency: "INR";
+  startingCapital: number;
+  startedAt: string;
+  strategy: { id: string; name: string; params: Record<string, number> } | null;
+  benchmarkSymbol: string | null;
+  costs: { costBps: number; slippageBps: number } | null;
+  legacy: boolean;
+  notes: string[];
+  assumptions: string[];
+  asOf: string;
+  instrument: { name?: string | null; exchange?: string | null; currency: string; timezone: string; source?: DataSource } | null;
+  fx: { pair: string; rate: number; source?: DataSource; basis: string } | null;
+  session: { timezone: string; open: boolean; label: string } | null;
+  signal: {
+    current: 0 | 1;
+    label: "Long" | "Flat";
+    provisional: boolean;
+    paused?: boolean;
+    pending: { side: "buy" | "sell"; when: string | null; provisional: boolean; reason: string } | null;
+  } | null;
+  summary: {
+    startingCapital: number;
+    equity: number;
+    cash: number;
+    pnl: number;
+    totalReturn: number;
+    buyHoldReturn: number | null;
+    excessVsBuyHold: number | null;
+    benchmarkReturn: number | null;
+    excessVsBenchmark: number | null;
+    maxDrawdown: number | null;
+    exposure: number;
+    totalCosts: number;
+    fills: number;
+    closedTrades: number;
+    winningTrades: number;
+    tradingDays: number;
+    firstSession: string | null;
+    lastSession: string | null;
+  };
+  position: {
+    shares: number;
+    avgPrice: number | null;
+    lastPrice: number;
+    costBasis: number;
+    marketValue: number;
+    unrealizedPnl: number;
+    unrealizedReturn: number | null;
+  } | null;
+  trades: SimulationFill[];
+  equity: Array<{ timestamp: string; value: number }>;
+  buyHold: Array<{ timestamp: string; value: number }>;
+  benchmark: Array<{ timestamp: string; value: number }>;
+  benchmarkSource?: DataSource | null;
+  metrics: Record<string, number | null>;
+  metricReasons: Record<string, string>;
+  mark: { price: number; source?: DataSource; time?: string | null } | null;
 }
 
 export interface OverviewTotals {
@@ -503,6 +621,7 @@ export type CopilotEvent =
   | { type: "message"; content: string; budgetReached?: boolean }
   | { type: "actions"; actions: CopilotAction[] }
   | { type: "sources"; sources: RagHit[] }
+  | { type: "masked"; kinds: string[] }
   | { type: "error"; message: string }
   | { type: "done" };
 
@@ -580,4 +699,203 @@ export interface RagResult {
   pendingIndex: number;
   method: "numpy" | "atlas";
   hits: RagHit[];
+}
+
+/* Portfolio of real holdings (Phase 10) ------------------------------------------------------ */
+export interface PortfolioImport {
+  id: string;
+  source: string;
+  rowCount: number;
+  createdAt: string;
+}
+
+export interface PortfolioHolding {
+  id: string;
+  importId: string;
+  symbol: string | null;
+  isin: string | null;
+  schemeCode: string | null;
+  name: string;
+  exchange: string | null;
+  currency: string | null;
+  type: string | null;
+  sector: string | null;
+  assetType: "equity" | "etf" | "mutual_fund" | "gold" | "other";
+  quantity: number;
+  avgCost: number | null;
+  buyDate: string | null;
+  createdAt: string;
+}
+
+export interface Portfolio {
+  imports: PortfolioImport[];
+  holdings: PortfolioHolding[];
+}
+
+export interface ImportRowPayload {
+  symbol?: string;
+  isin?: string;
+  quantity: number;
+  avgCost?: number;
+  buyDate?: string;
+  assetType: string;
+}
+
+/** Structured 422 bodies from POST /portfolio/imports. Never contain submitted values. */
+export type ImportRejection =
+  | { code: "personal_data_detected"; message: string; findings: Array<{ row: number; field: string; kind: string; label: string }> }
+  | { code: "unresolved_instruments"; message: string; rows: Array<{ row: number; field: string }> }
+  | { code: "invalid_rows"; message: string; problems: Array<{ row: number | null; field: string | null; type: string; message: string }> }
+  | { code: "fund_lookup_unavailable"; message: string };
+
+export interface PortfolioPosition {
+  key: string;
+  label: string;
+  symbol: string | null;
+  isin: string | null;
+  assetType: string;
+  sector: string | null;
+  currency: string;
+  quantity: number;
+  price: number;
+  priceSource: string;
+  priceAsOf: string | null;
+  fxRate: number | null;
+  value: number;
+  weight: number;
+  cost: number | null;
+  pnl: number | null;
+  pnlReturn: number | null;
+  beta: number | null;
+  inRiskFigures: boolean;
+}
+
+export interface MixItem {
+  label: string;
+  weight: number;
+}
+
+export interface ConcentrationFigures {
+  top1: number | null;
+  top5: number | null;
+  hhi: number | null;
+  effectiveHoldings: number | null;
+}
+
+export interface PortfolioReportData {
+  asOf: string;
+  currency: "INR";
+  range: string;
+  confidence: number;
+  benchmark: { symbol: string; source?: DataSource | null };
+  totals: { value: number; positions: number; lots: number; cost: number | null; costCoverage: number | null; unrealizedPnl: number | null };
+  positions: PortfolioPosition[];
+  unpriced: Array<{ key: string; label: string; reason: string }>;
+  concentration: ConcentrationFigures;
+  sectorMix: MixItem[];
+  assetMix: MixItem[];
+  risk: Record<string, number | null>;
+  riskReasons: Record<string, string>;
+  window: { start: string | null; end: string | null; days: number };
+  coverage: { included: string[]; excluded: Array<{ key: string; label: string; reason: string }> };
+  equity: Array<{ timestamp: string; value: number }>;
+  benchmarkCurve: Array<{ timestamp: string; value: number }>;
+  drawdown: Array<{ timestamp: string; value: number }>;
+  correlation: { keys: string[]; matrix: Array<Array<number | null>>; reason: string | null };
+  xirr: { value: number | null; reason: string | null; positionsCovered: number };
+  observations: string[];
+  disclaimer: string;
+}
+
+export interface WhatIfPayload {
+  range?: string;
+  benchmark?: string;
+  confidence?: number;
+  cap?: { key: string; maxWeight: number };
+  remove?: string[];
+  shock?: { kind: "market" | "sector"; pct: number; sector?: string };
+}
+
+export interface WhatIfSide {
+  concentration: ConcentrationFigures;
+  sectorMix: MixItem[];
+  risk: Record<string, number | null>;
+  riskReasons?: Record<string, string>;
+}
+
+export interface WhatIfResult {
+  before: WhatIfSide;
+  after: WhatIfSide & { weights: Record<string, number> };
+  shock?: {
+    kind: string;
+    pct: number;
+    sector?: string | null;
+    before: { change: number | null; changeInr: number | null };
+    after: { change: number | null; changeInr: number | null };
+    assumedBetaOne: string[];
+  };
+}
+
+/* Market intelligence (Phase 11) ------------------------------------------------------------- */
+export interface FlowSide {
+  buy: number | null;
+  sell: number | null;
+  net: number | null;
+}
+
+export interface InstitutionalFlows {
+  cash: Array<{ date: string; fii: FlowSide; dii: FlowSide; fiiCumulative: number; diiCumulative: number }>;
+  positioning: Array<{ date: string; fiiIndexFuturesLongShare: number | null; indexFuturesNet: Record<string, number> }>;
+  unit: { cash: string; positioning: string };
+  asOf: { cash: string | null; positioning: string | null };
+  historySince: { cash: string | null; positioning: string | null };
+  health: Record<string, { status: string; checkedAt: string; asOf?: string | null } | null>;
+}
+
+export interface SectorFlowEntry {
+  sector: string;
+  netEquity: number | null;
+  netTotal: number | null;
+  aucEquity: number | null;
+  aucShare: number | null;
+}
+
+export interface SectorFlows {
+  reports: Array<{ date: string; period: string; sectors: SectorFlowEntry[]; total: SectorFlowEntry | null }>;
+  unit: string;
+  frequency: string;
+  asOf: string | null;
+  indexPerformance: Array<{ symbol: string; label: string; return: number | null; from?: string; to?: string; reason?: string }>;
+  performanceRange: string;
+  health: { status: string; checkedAt: string } | null;
+}
+
+export interface CapexYear {
+  fiscalYearEnd: string;
+  capex: number;
+  operatingCashFlow: number | null;
+  revenue: number | null;
+  capexToRevenue: number | null;
+  capexToOperatingCashFlow: number | null;
+  capexGrowth: number | null;
+}
+
+export interface CompanyCapex {
+  symbol: string;
+  name?: string;
+  sector?: string | null;
+  source: "live" | "unavailable";
+  asOf?: string;
+  reason?: string;
+  data?: { symbol: string; currency: string | null; years: CapexYear[]; frequency: string };
+}
+
+export interface SectorCapex {
+  source: "live" | "stored" | "unavailable";
+  asOf?: string;
+  reason?: string;
+  note?: string;
+  universe?: string;
+  coverage?: { reporting: number; total: number };
+  sectors?: Array<{ sector: string; companies: number; years: Array<{ fiscalYear: string; capex: number; revenue: number; reporting: number; capexGrowth: number | null; capexToRevenue: number | null }> }>;
 }
