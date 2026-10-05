@@ -622,6 +622,7 @@ export type CopilotEvent =
   | { type: "actions"; actions: CopilotAction[] }
   | { type: "sources"; sources: RagHit[] }
   | { type: "masked"; kinds: string[] }
+  | { type: "advisory"; disclaimer: string }
   | { type: "error"; message: string }
   | { type: "done" };
 

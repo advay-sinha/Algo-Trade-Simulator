@@ -97,11 +97,64 @@ def test_notes_with_personal_data_are_refused_whole():
         assert "phone number" in exc.message
 
 
-def test_advice_questions_get_the_no_advice_reminder():
-    for question in ["Should I sell RELIANCE?", "should i buy more TCS now", "Is it a good time to exit my HDFC position?", "Which stocks should I sell?", "rebalance my portfolio for me"]:
+def test_investment_questions_get_a_research_report_reminder_and_disclaimer():
+    for question in [
+        "Should I sell RELIANCE?",
+        "should i buy more TCS now",
+        "Is it a good time to exit my HDFC position?",
+        "Which stocks should I sell?",
+        "rebalance my portfolio for me",
+        "is reliance good for investing",
+        "Is TCS a good stock to buy?",
+        "is infosys worth buying",
+        "buy or sell HDFC bank",
+        "should i invest in reliance",
+    ]:
         assert guardrails.asks_for_advice(question), question
-    for neutral in ["How volatile is my portfolio?", "What is my exposure to banks?", "Explain VaR", "how did TCS do this year?"]:
+    for neutral in ["How volatile is my portfolio?", "What is my exposure to banks?", "Explain VaR", "how did TCS do this year?", "is this backtest good?", "what is a good sharpe ratio?"]:
         assert not guardrails.asks_for_advice(neutral), neutral
-    llm = ScriptedLLM([AIMessage(content="I can't make that call, but here are the risks.")])
-    run("alice", new_store(), "Should I sell RELIANCE?", llm)
-    assert "must not decide for them" in llm.calls[-1][-1].content
+    llm = ScriptedLLM([AIMessage(content="RELIANCE research report: signals are mixed.")])
+    events = run("alice", new_store(), "is reliance good for investing", llm)
+    reminder = llm.calls[-1][-1].content
+    assert "Don't refuse it" in reminder and "analyze_stock" in reminder and guardrails.DISCLAIMER in reminder
+    advisory = [e for e in events if e["type"] == "advisory"]
+    assert advisory and advisory[0]["disclaimer"] == guardrails.DISCLAIMER
+    reply = next(e for e in events if e["type"] == "message")["content"]
+    assert reply.startswith("RELIANCE research report") and reply.endswith(guardrails.DISCLAIMER)  # appended server-side
+
+
+def test_disclaimer_is_not_duplicated_and_not_added_to_other_questions():
+    already = "Report.\n\n" + guardrails.DISCLAIMER
+    llm = ScriptedLLM([AIMessage(content=already)])
+    events = run("alice", new_store(), "should I buy TCS?", llm)
+    assert next(e for e in events if e["type"] == "message")["content"].count("not financial advice") == 1
+    plain = ScriptedLLM([AIMessage(content="VaR is the loss threshold...")])
+    events = run("alice", new_store(), "Explain VaR", plain)
+    assert not [e for e in events if e["type"] == "advisory"]
+    assert "not financial advice" not in next(e for e in events if e["type"] == "message")["content"]
+
+
+def test_analyze_stock_tool_reports_signals_in_explicit_units():
+    from backend.services import market_data_service as market
+    from backend.tests.test_copilot import fake_history
+
+    async def history(symbol, range_value="1y"):
+        return await fake_history(symbol, range_value)
+
+    saved = market.get_daily_history
+    market.get_daily_history = history
+    try:
+        llm = ScriptedLLM([tool_call("analyze_stock", {"symbol": "RELIANCE.NS"}, "a1"), AIMessage(content="Report.")])
+        events = run("alice", new_store(), "is reliance good for investing", llm)
+    finally:
+        market.get_daily_history = saved
+    end = next(e for e in events if e["type"] == "tool_end")
+    assert end["ok"], end
+    import json
+
+    result = json.loads([m for m in llm.calls[-1] if getattr(m, "type", "") == "tool"][0].content)
+    assert result["available"] and result["lastPrice"] and "return1yPct" in result and "volatilityAnnualPct" in result
+    assert {s["strategyId"] for s in result["strategySignals"]} == {"sma-crossover", "momentum", "mean-reversion"}
+    assert all(s["signal"] in ("bullish (long)", "neutral (flat)") and s["reason"] for s in result["strategySignals"])
+    assert result["signalTilt"]["label"] in ("leaning positive", "leaning negative", "mixed")
+    assert result["trend"].startswith(("uptrend", "downtrend")) and 0 <= result["rsi14"] <= 100
