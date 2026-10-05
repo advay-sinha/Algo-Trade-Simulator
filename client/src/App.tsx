@@ -17,6 +17,9 @@ const ModelsPage = lazy(() => import("./pages/ModelsPage").then((m) => ({ defaul
 const ModelDetailPage = lazy(() => import("./pages/ModelDetailPage").then((m) => ({ default: m.ModelDetailPage })));
 const BacktestsPage = lazy(() => import("./pages/BacktestsPage").then((m) => ({ default: m.BacktestsPage })));
 const BacktestDetailPage = lazy(() => import("./pages/BacktestDetailPage").then((m) => ({ default: m.BacktestDetailPage })));
+const StrategyLabPage = lazy(() => import("./pages/StrategyLabPage").then((m) => ({ default: m.StrategyLabPage })));
+const ResearchRunPage = lazy(() => import("./pages/ResearchRunPage").then((m) => ({ default: m.ResearchRunPage })));
+const RankingModelPage = lazy(() => import("./pages/RankingModelPage").then((m) => ({ default: m.RankingModelPage })));
 const MarketFlowsPage = lazy(() => import("./pages/MarketFlowsPage").then((m) => ({ default: m.MarketFlowsPage })));
 const PortfolioPage = lazy(() => import("./pages/PortfolioPage").then((m) => ({ default: m.PortfolioPage })));
 const SimulationDetailPage = lazy(() => import("./pages/SimulationDetailPage").then((m) => ({ default: m.SimulationDetailPage })));
@@ -88,6 +91,9 @@ function AppRoutes() {
           { path: "lab/datasets", element: <DatasetsPage /> },
           { path: "lab/models", element: <ModelsPage /> },
           { path: "lab/models/:modelId", element: <ModelDetailPage /> },
+          { path: "lab/strategies", element: <StrategyLabPage /> },
+          { path: "lab/runs/:runId", element: <ResearchRunPage /> },
+          { path: "lab/ranking/:experimentId", element: <RankingModelPage /> },
           { path: "backtests", element: <BacktestsPage /> },
           { path: "backtests/:backtestId", element: <BacktestDetailPage /> },
           { path: "simulations", element: <SimulationsPage /> },

@@ -118,6 +118,16 @@ class CapexArgs(BaseModel):
     symbols: List[str] = Field(min_length=1, max_length=5, description="Company tickers, e.g. ['RELIANCE.NS', 'LT.NS'].")
 
 
+class ResearchRunIdArgs(BaseModel):
+    run_id: str = Field(pattern=r"^[0-9a-f]{32}$", description="Research run or comparison id from list_research_runs.")
+
+
+class ExplainPositionArgs(BaseModel):
+    run_id: str = Field(pattern=r"^[0-9a-f]{32}$", description="Research run id (a single run, not a comparison).")
+    symbol: str = Field(pattern=SYMBOL_PATTERN, description="Stock in that run, e.g. 'RELIANCE.NS'.")
+    date: Optional[str] = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", description="As-of date YYYY-MM-DD; default the run's end.")
+
+
 class SimulationIdArgs(BaseModel):
     simulation_id: str = Field(min_length=1, max_length=64, description="Simulation id from portfolio_overview.")
 
@@ -441,6 +451,36 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         ctx.actions.append({"type": "note", "id": record["id"], "label": f"Note · {record['title']}", "path": "/research"})
         return {"id": record["id"], "title": record["title"], "created": created, "indexed": bool(record.get("embedding")), "sentiment": record.get("sentiment")}
 
+    async def list_research_runs() -> Dict[str, Any]:
+        from backend.services.research_explain import run_list_item
+
+        items = await ctx.store.list_research_runs(ctx.user_id, limit=10)
+        return {"runs": [run_list_item(item) for item in items], "note": "Paper research on frozen historical data; universes are survivorship-biased."}
+
+    async def get_research_run(run_id: str) -> Dict[str, Any]:
+        from backend.services.research_explain import run_report
+
+        record = await ctx.store.get_research_run(ctx.user_id, run_id)
+        if not record:
+            raise ActionError("Research run not found", status=404)
+        return run_report(record)
+
+    async def explain_position(run_id: str, symbol: str, date: Optional[str] = None) -> Dict[str, Any]:
+        from backend.services.research_explain import explain_position as explain
+
+        record = await ctx.store.get_research_run(ctx.user_id, run_id)
+        if not record:
+            raise ActionError("Research run not found", status=404)
+        if record.get("kind") != "run":
+            raise ActionError("That id is a comparison; pass one of its run ids (rows[].runId from get_research_run)")
+        return explain(record, symbol, date)
+
+    async def list_ranking_models() -> Dict[str, Any]:
+        from backend.services.ranking_service import summarize_experiment
+        from backend.services.research_explain import ranking_summary
+
+        return {"experiments": [ranking_summary(summarize_experiment(item)) for item in (await ctx.store.list_ranking_experiments())[:5]]}
+
     specs = [
         (search_symbols, "search_symbols", "Find ticker symbols by company/fund/ETF name, with exchange and type. Use it before quoting anything the user names instead of giving an exact ticker.", SymbolSearchArgs),
         (get_quote, "get_quote", "Latest quotes for up to 10 symbols, with data source flags.", QuoteArgs),
@@ -460,6 +500,10 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
         (get_model_signal, "get_model_signal", "Latest signal from a registered model (by id, or the newest model for a symbol).", SignalArgs),
         (create_simulation, "create_simulation", "Create AND SAVE a paper-trading simulation for the user.", SimulationArgs),
         (search_research_notes, "search_research_notes", "Semantic search over the user's saved research notes and saved backtest/model summaries; returns the closest matches with similarity scores.", NoteSearchArgs),
+        (list_research_runs, "list_research_runs", "The user's recent strategy-research runs and comparisons (universe strategies on frozen data): ids, labels, returns in percent, charges in INR.", NoArgs),
+        (get_research_run, "get_research_run", "One research run (metrics in percent, charges in INR, assumptions, caveats) or comparison (every row on identical settings, incl. cost-stress reruns and the index).", ResearchRunIdArgs),
+        (explain_position, "explain_position", "Recorded evidence for one stock in one research run: fills with the reason the strategy recorded, target weights at recent decisions, shares held, blocked orders.", ExplainPositionArgs),
+        (list_ranking_models, "list_ranking_models", "Stored ML stock-ranking experiments: model names, maturity, validation rank IC, training cutoff.", NoArgs),
         (save_research_note, "save_research_note", "SAVE a research note to the user's research memory (or a summary of a saved backtest/model).", NoteSaveArgs),
     ]
     return [StructuredTool.from_function(coroutine=fn, name=name, description=description, args_schema=schema) for fn, name, description, schema in specs]

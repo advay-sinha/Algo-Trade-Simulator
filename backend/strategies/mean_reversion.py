@@ -26,6 +26,8 @@ class MeanReversion(Strategy):
     name = "Mean reversion channel"
     description = "Long after price falls below the lower band; flat once it recovers toward the mean."
     params_model = MeanReversionParams
+    data_requirements = "Daily closes of one symbol; one full lookback window for the mean and deviation."
+    holding_horizon = "From a stretched dip until the price recovers toward its mean (typically days to weeks)."
 
     def min_history(self, params: MeanReversionParams) -> int:  # type: ignore[override]
         return params.lookback
