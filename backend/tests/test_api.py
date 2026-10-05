@@ -82,6 +82,12 @@ def test_simulation_crud_ordering_and_validation():
     first = client.post("/api/simulations", headers=headers, json={"symbol": "AAPL", "strategy": "sma-crossover", "startingCapital": 1000}).json()
     second = client.post("/api/simulations", headers=headers, json={"symbol": "MSFT", "strategy": "momentum", "startingCapital": 2000}).json()
     listed = client.get("/api/simulations", headers=headers).json()
+    assert first["currency"] == second["currency"] == "INR"
+    assert all(item["currency"] == "INR" for item in listed)
+    overview = client.get("/api/analytics/overview", headers=headers).json()
+    assert overview["totals"]["currency"] == "INR"
+    assert overview["totals"]["totalStartingCapital"] == 3000
+    assert client.post("/api/simulations", headers=headers, json={"symbol": "AAPL", "strategy": "s", "startingCapital": 1000, "currency": "USD"}).status_code == 422
     assert [item["id"] for item in listed] == [second["id"], first["id"]]  # newest first in every store
     assert client.patch(f"/api/simulations/{first['id']}", headers=headers, json={"status": "hacked"}).status_code == 422
     assert client.patch(f"/api/simulations/{first['id']}", headers=headers, json={"status": "paused"}).json()["status"] == "paused"
@@ -157,3 +163,20 @@ def test_status_exposes_no_secrets():
 def test_dev_bypass_disabled_by_default():
     client = _client()
     assert client.post("/api/dev/auth/bypass", json={}).status_code == 403
+
+
+def test_legacy_simulation_budgets_are_nominal_inr_in_both_stores():
+    import asyncio
+    from backend.stores import InMemoryStore, MongoStore
+    from backend.models.simulation import SimulationUpdate
+
+    legacy = {"id": "old", "userId": "alice", "symbol": "AAPL", "strategy": "sma-crossover", "startingCapital": 10000, "status": "active", "createdAt": "2026-01-01T00:00:00+00:00"}
+    store = InMemoryStore()
+    store.simulations["old"] = legacy.copy()
+    listed = asyncio.run(store.list_simulations("alice"))[0]
+    mongo = MongoStore._format_simulation({**legacy, "_id": "old"})
+    patched = asyncio.run(store.update_simulation("alice", "old", SimulationUpdate(status="paused")))
+    for record in [listed, mongo, patched]:
+        assert record["currency"] == "INR"
+        assert record["startingCapital"] == 10000  # Nominal paper budget, not a guessed FX conversion.
+    assert asyncio.run(store.list_simulations("bob")) == []

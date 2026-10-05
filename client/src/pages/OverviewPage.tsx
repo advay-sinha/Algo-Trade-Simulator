@@ -5,7 +5,7 @@ import { Sparkline } from "../components/charts/Sparkline";
 import { Icon } from "../components/ui/Icon";
 import { DataSourceBadge, EmptyState, ErrorState, MetricCard, SectionHeader, Skeleton, StatusPill } from "../components/ui/primitives";
 import { ENGINES, SECTIONS } from "../content/sections";
-import { formatDate, formatMoney, formatSignedFraction } from "../lib/format";
+import { formatDate, formatPrice, formatSimulationMoney, formatSignedFraction } from "../lib/format";
 import { useAuthedQuery } from "../lib/hooks";
 import { useAuthed } from "../lib/session";
 
@@ -57,8 +57,8 @@ export function OverviewPage() {
           <>
             <MetricCard label="Simulations" value={totals?.totalSimulations ?? 0} sub={`${totals?.activeSimulations ?? 0} active · ${totals?.completedSimulations ?? 0} completed`} />
             <MetricCard
-              label="Simulated capital"
-              value={formatMoney(totals?.totalStartingCapital ?? 0)}
+              label="Simulated capital (INR)"
+              value={formatSimulationMoney(totals?.totalStartingCapital ?? 0)}
               sub="Starting capital across all simulations"
               hint="Paper money only — the sum of starting capital you assigned to simulations. Nothing is invested."
             />
@@ -103,7 +103,7 @@ export function OverviewPage() {
                         {formatSignedFraction(change)}
                       </span>
                     </div>
-                    <span className="watch-price num">{formatMoney(last ?? null)}</span>
+                    <span className="watch-price num">{formatPrice(last, series.currency)}</span>
                     <Sparkline points={series.points} label={`${series.symbol} closing prices over the last month`} />
                     <DataSourceBadge source={series.source} />
                   </div>
@@ -138,7 +138,7 @@ export function OverviewPage() {
                       {simulation.strategy} · {formatDate(simulation.createdAt)}
                     </span>
                   </div>
-                  <span className="text-secondary num">{formatMoney(simulation.startingCapital)}</span>
+                  <span className="text-secondary num">{formatSimulationMoney(simulation.startingCapital)}</span>
                   <span className="status-pill">{simulation.status}</span>
                 </li>
               ))}

@@ -405,3 +405,15 @@ docker compose up --build
 ```
 
 Open `http://localhost:8080`. The frontend container serves the build and proxies `/api` to the backend (streaming responses unbuffered). Keys such as `GROQ_API_KEY` are read from `backend/.env` at runtime and never baked into images. The backend image alone (`Dockerfile`) honours `$PORT`, so it also runs on free container hosts.
+
+### Paper simulation currency
+
+Simulation starting capital and portfolio budget totals are denominated in **INR (₹)**,
+with Indian digit grouping in the UI. REST and copilot creation paths save `currency: "INR"`;
+requests to create a simulation in another currency are rejected by the REST schema.
+Existing simulation budget numbers retain their numeric value and are interpreted as INR
+(for example, a saved budget of 10,000 is now ₹10,000). This is a nominal paper-budget
+change, **not** an exchange-rate conversion of holdings. Market quotes and backtest results
+continue to use the instrument's native currency; there is no FX conversion service.
+
+Currency formatting regression check: `node scripts/test-currency.mjs`.

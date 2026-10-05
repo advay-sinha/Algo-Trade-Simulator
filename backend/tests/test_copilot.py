@@ -73,6 +73,8 @@ def test_create_simulation_is_scoped_to_the_user_and_echoed():
     assert types == ["tool_start", "tool_end", "message", "actions", "done"]
     assert events[1]["ok"] is True
     assert events[3]["actions"][0]["type"] == "simulation"
+    assert events[1]["result"]["currency"] == "INR"
+    assert "INR 25,000" in events[3]["actions"][0]["label"]
     assert len(asyncio.run(store.list_simulations("alice"))) == 1
     assert asyncio.run(store.list_simulations("bob")) == []
     assert "create_simulation" in llm.tool_names

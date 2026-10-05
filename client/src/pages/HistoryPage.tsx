@@ -6,7 +6,7 @@ import { fetchBacktests, fetchModels, fetchNotes, fetchSimulations, fetchTrainin
 import { Icon } from "../components/ui/Icon";
 import { EmptyState, ErrorState, Pagination, SectionHeader, SkeletonRows } from "../components/ui/primitives";
 import { SECTIONS } from "../content/sections";
-import { formatDateTime, formatFraction, formatMoney, formatSignedFraction } from "../lib/format";
+import { formatDateTime, formatFraction, formatSimulationMoney, formatSignedFraction } from "../lib/format";
 import { useAuthedQuery, useSlashFocus } from "../lib/hooks";
 
 type RecordType = "backtest" | "model" | "simulation" | "training" | "note";
@@ -61,7 +61,7 @@ export function HistoryPage() {
           type: "simulation" as const,
           symbol: simulation.symbol,
           detail: simulation.strategy,
-          value: `${formatMoney(simulation.startingCapital)} capital`,
+          value: `${formatSimulationMoney(simulation.startingCapital)} capital`,
           status: simulation.status,
           date: simulation.createdAt,
         })),

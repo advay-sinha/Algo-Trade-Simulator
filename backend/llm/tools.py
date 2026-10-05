@@ -91,7 +91,7 @@ class NoteSaveArgs(BaseModel):
 class SimulationArgs(BaseModel):
     symbol: str = Field(pattern=SYMBOL_PATTERN)
     strategy: str = Field(default="sma-crossover", min_length=1, max_length=60)
-    startingCapital: float = Field(gt=0, le=1_000_000_000)
+    startingCapital: float = Field(gt=0, le=1_000_000_000, description="Paper simulation budget in INR, not the instrument quote currency")
     notes: Optional[str] = Field(default=None, max_length=400)
 
 
@@ -215,7 +215,8 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
                 "simulations": len(simulations),
                 "byStatus": by_status,
                 "totalStartingCapital": total,
-                "recent": [{k: sim.get(k) for k in ("symbol", "strategy", "startingCapital", "status", "createdAt")} for sim in simulations[:10]],
+                "currency": "INR",
+                "recent": [{k: sim.get(k) for k in ("symbol", "strategy", "startingCapital", "currency", "status", "createdAt")} for sim in simulations[:10]],
             }
         )
 
@@ -259,8 +260,8 @@ def build_tools(ctx: ToolContext) -> List[StructuredTool]:
 
         payload = SimulationInput(symbol=symbol.upper(), strategy=strategy, startingCapital=startingCapital, notes=notes)
         record = await ctx.store.add_simulation(ctx.user_id, payload)
-        ctx.actions.append({"type": "simulation", "id": record["id"], "label": f"Simulation {record['symbol']} · {record['startingCapital']:,.0f}", "path": "/simulations"})
-        return {k: record.get(k) for k in ("id", "symbol", "strategy", "startingCapital", "status", "createdAt")}
+        ctx.actions.append({"type": "simulation", "id": record["id"], "label": f"Simulation {record['symbol']} · INR {record['startingCapital']:,.0f}", "path": "/simulations"})
+        return {k: record.get(k) for k in ("id", "symbol", "strategy", "startingCapital", "currency", "status", "createdAt")}
 
     async def search_research_notes(query: str, k: int = 5) -> Dict[str, Any]:
         from backend.llm import rag

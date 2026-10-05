@@ -21,6 +21,12 @@ export function formatMoney(value: number | null | undefined, currency = "USD"):
   }
 }
 
+/** Paper simulation budgets use INR; market prices and backtests keep their native currency. */
+export function formatSimulationMoney(value: number | null | undefined): string {
+  if (!isFiniteNumber(value)) return DASH;
+  return value.toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+}
+
 export function formatCompact(value: number | null | undefined): string {
   if (!isFiniteNumber(value)) return DASH;
   return value.toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });

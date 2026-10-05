@@ -211,9 +211,9 @@ export const SECTIONS = {
     title: "Simulations",
     navLabel: "Simulations",
     summary:
-      "Paper-trading runs you're tracking: which symbol, which strategy, and how much simulated capital. Create one, move it through its lifecycle, or remove it.",
+      "Paper-trading runs you're tracking: which symbol, which strategy, and how much simulated capital in INR. Existing saved budget amounts keep their numeric value in rupees; no exchange-rate conversion is applied. Create one, move it through its lifecycle, or remove it.",
     howItWorks: [
-      "Create a simulation with a symbol, strategy, and starting capital.",
+      "Create a simulation with a symbol, strategy, and starting capital in INR.",
       "Move it between active, paused, completed, and archived.",
       "Delete asks for confirmation and can't be undone.",
     ],
