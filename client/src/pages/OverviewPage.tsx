@@ -32,7 +32,16 @@ export function OverviewPage() {
 
   return (
     <div className="page">
-      <SectionHeader section={SECTIONS.overview} title={`Welcome back, ${firstName}`} showStatus={false} showSteps={false} />
+      <div className="overview-heading">
+        <div><span className="eyebrow">WORKSPACE OVERVIEW</span>
+          <SectionHeader section={SECTIONS.overview} title={`Welcome back, ${firstName}`} showStatus={false} showSteps={false} />
+        </div>
+        <Link to={SECTIONS.backtests.route} className="btn btn-primary"><Icon name="activity" /> Run a backtest</Link>
+      </div>
+      <div className="workspace-banner">
+        <div className="cluster"><Icon name="shield" /><span><strong>Your edge starts with research.</strong> Test strategies, compare results, and build conviction.</span></div>
+        <span className="status-pill">Simulated capital only</span>
+      </div>
 
       {overview.error ? <ErrorState message={overview.error} onRetry={() => void overview.reload()} /> : null}
 
@@ -94,6 +103,7 @@ export function OverviewPage() {
                         {formatSignedFraction(change)}
                       </span>
                     </div>
+                    <span className="watch-price num">{formatMoney(last ?? null)}</span>
                     <Sparkline points={series.points} label={`${series.symbol} closing prices over the last month`} />
                     <DataSourceBadge source={series.source} />
                   </div>
@@ -104,7 +114,7 @@ export function OverviewPage() {
         </div>
       </section>
 
-      <div className="grid-2">
+      <div className="grid-2 overview-support">
         <section className="table-frame" aria-labelledby="recent-heading">
           <div className="panel-header" style={{ paddingBottom: "var(--space-3)", borderBottom: "1px solid var(--border-l1)" }}>
             <h2 id="recent-heading" style={{ fontSize: "var(--text-h4)" }}>
@@ -149,10 +159,10 @@ export function OverviewPage() {
         <section className="table-frame" aria-labelledby="directory-heading">
           <div className="panel-header" style={{ paddingBottom: "var(--space-3)", borderBottom: "1px solid var(--border-l1)" }}>
             <h2 id="directory-heading" style={{ fontSize: "var(--text-h4)" }}>
-              Where to go
+              Research workspace
             </h2>
           </div>
-          <ul className="list-plain">
+          <ul className="list-plain workspace-directory">
             {DIRECTORY.map((section) => (
               <li key={section.id}>
                 <Link to={section.route} className="list-row">

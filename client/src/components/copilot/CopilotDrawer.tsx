@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { Link } from "react-router-dom";
+import { MarkdownResponse } from "./MarkdownResponse";
 import { streamCopilot } from "../../api";
 import { describeError } from "../../lib/errors";
 import { formatFraction, formatSignedFraction } from "../../lib/format";
@@ -264,7 +265,7 @@ export function CopilotDrawer({
                     ))}
                   </div>
                 ) : null}
-                {turn.content ? <div className="bubble">{turn.content}</div> : null}
+                {turn.content ? <div className="bubble">{turn.role === "assistant" ? <MarkdownResponse content={turn.content} /> : turn.content}</div> : null}
                 {turn.pending && !turn.content && !turn.error ? <span className="text-meta">Thinking…</span> : null}
                 {turn.error ? (
                   <Notice tone="warn" icon="alert">
