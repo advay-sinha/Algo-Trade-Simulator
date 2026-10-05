@@ -16,6 +16,9 @@ class BuyAndHold(Strategy):
     name = "Buy and hold"
     description = "Buy at the first opportunity and hold to the end — the baseline every strategy should beat."
     params_model = BuyAndHoldParams
+    data_requirements = "Daily prices of one symbol."
+    holding_horizon = "The whole window."
+    risk_controls = ["None: fully invested from the first executable open."]
 
     def min_history(self, params: BuyAndHoldParams) -> int:  # type: ignore[override]
         return 1

@@ -49,6 +49,7 @@ const NAV_GROUPS: Array<{ label: string; items: NavItem[] }> = [
       { to: SECTIONS.datasets.route, label: SECTIONS.datasets.navLabel, icon: "table" },
       { to: SECTIONS.models.route, label: SECTIONS.models.navLabel, icon: "layers" },
       { to: SECTIONS.backtests.route, label: SECTIONS.backtests.navLabel, icon: "activity" },
+      { to: SECTIONS.strategyLab.route, label: SECTIONS.strategyLab.navLabel, icon: "trend" },
       { to: SECTIONS.simulations.route, label: SECTIONS.simulations.navLabel, icon: "wallet" },
       { to: SECTIONS.portfolio.route, label: SECTIONS.portfolio.navLabel, icon: "pie" },
       { to: SECTIONS.research.route, label: SECTIONS.research.navLabel, icon: "database" },

@@ -49,6 +49,17 @@ import type {
   NoteCreatePayload,
   NoteKind,
   RagResult,
+  ResearchStrategy,
+  ResearchDataset,
+  ResearchRunRecord,
+  ResearchComparison,
+  ResearchComparePayload,
+  ResearchRunListItem,
+  ResearchFillsPage,
+  ResearchHoldings,
+  ResearchReplay,
+  RankingExperiment,
+  RankingExperimentSummary,
 } from "./types";
 
 // Same-origin by default: the Vite dev server proxies /api to the backend, and production
@@ -432,4 +443,59 @@ export function fetchCompanyCapex(token: string, symbols: string[]) {
 
 export function fetchSectorCapex(token: string) {
   return request<SectorCapex>("/fundamentals/capex/sectors", { token });
+}
+
+// Strategy research (Phase 13) ------------------------------------------------------------------
+
+export function fetchResearchDatasets(token: string) {
+  return request<ResearchDataset[]>("/research-runs/datasets", { token });
+}
+
+export function fetchResearchStrategies(token: string) {
+  return request<ResearchStrategy[]>("/research-runs/strategies", { token });
+}
+
+export function compareResearch(token: string, payload: ResearchComparePayload) {
+  return request<ResearchComparison>("/research-runs/compare", { method: "POST", body: payload, token });
+}
+
+export function fetchResearchRuns(token: string) {
+  return request<ResearchRunListItem[]>("/research-runs", { token });
+}
+
+export function fetchResearchRun(token: string, id: string) {
+  return request<ResearchRunRecord | ResearchComparison>(`/research-runs/${encodeURIComponent(id)}`, { token });
+}
+
+export function fetchResearchRunFills(token: string, id: string, offset = 0, limit = 25) {
+  return request<ResearchFillsPage>(`/research-runs/${encodeURIComponent(id)}/fills?offset=${offset}&limit=${limit}`, { token });
+}
+
+export function fetchResearchRunHoldings(token: string, id: string, date?: string) {
+  const query = date ? `?date=${encodeURIComponent(date)}` : "";
+  return request<ResearchHoldings>(`/research-runs/${encodeURIComponent(id)}/holdings${query}`, { token });
+}
+
+export function replayResearchRun(token: string, id: string) {
+  return request<ResearchReplay>(`/research-runs/${encodeURIComponent(id)}/replay`, { method: "POST", token });
+}
+
+/** The run's files (config, equity, fills, holdings, decisions) as a zip. */
+export async function downloadResearchRun(token: string, id: string): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/research-runs/${encodeURIComponent(id)}/export`, { headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    throw new ApiError("Network request failed", 0);
+  }
+  if (!response.ok) throw new ApiError(response.statusText || "Download failed", response.status, response.headers.get("Retry-After"));
+  return response.blob();
+}
+
+export function fetchRankingExperiments(token: string) {
+  return request<RankingExperimentSummary[]>("/research-runs/models", { token });
+}
+
+export function fetchRankingExperiment(token: string, id: string) {
+  return request<RankingExperiment>(`/research-runs/models/${encodeURIComponent(id)}`, { token });
 }

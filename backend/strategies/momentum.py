@@ -22,8 +22,10 @@ class MomentumParams(StrategyParams):
 class Momentum(Strategy):
     id = "momentum"
     name = "Time-series momentum"
-    description = "Long while the trailing return over the lookback window is above the threshold."
+    description = "Absolute (time-series) momentum on one symbol: long while its own trailing return over the lookback window is above the threshold. It does not compare stocks with each other."
     params_model = MomentumParams
+    data_requirements = "Daily closes of one symbol; lookback + 1 sessions."
+    holding_horizon = "While the symbol's own trailing return stays above the threshold."
 
     def min_history(self, params: MomentumParams) -> int:  # type: ignore[override]
         return params.lookback + 1

@@ -164,6 +164,30 @@ export const SECTIONS = {
     status: "live",
     phase: 5,
   },
+  strategyLab: {
+    id: "strategyLab",
+    route: "/lab/strategies",
+    title: "Strategy research",
+    navLabel: "Strategy research",
+    summary:
+      "Compare universe strategies — cross-sectional momentum and volatility-managed trend following — against an equal-weight baseline and the index on one frozen price snapshot, with Indian transaction charges, next-open fills and a cost-stress rerun. Results are research evidence, not a promise of returns.",
+    howItWorks: [
+      "Pick a research dataset: a frozen, versioned snapshot of daily prices for a universe such as the Nifty 100.",
+      "Choose strategies and settings; every run in a comparison shares the same dates, capital, eligibility rules and costs.",
+      "Each strategy decides target weights at a close using only data up to that close; orders fill at the next open, whole shares, after charges.",
+      "Read the table and curves against the equal-weight baseline, the index and each strategy rerun at double costs.",
+    ],
+    features: [
+      { id: "snapshot", label: "Frozen snapshot", hoverText: "Runs read a versioned copy of the prices instead of live data, so the same settings always give the same result. The version is a fingerprint of the data." },
+      { id: "survivorship", label: "Survivorship bias", hoverText: "Universes use today's index members. Stocks that dropped out or delisted are missing, which makes every historical result — baselines included — look better than it really was." },
+      { id: "costs", label: "Indian charges", hoverText: "Each fill pays STT, exchange and SEBI fees, stamp duty on buys, GST and a DP charge on sells, from a dated schedule with sources. Brokerage defaults to zero for delivery." },
+      { id: "stress", label: "Cost stress", hoverText: "Every strategy is rerun with all charges doubled. A result that only works at low costs is fragile." },
+      { id: "maturity", label: "Maturity labels", hoverText: "Baseline = reference method. Research = new and unproven. Validated = passed criteria fixed before testing on unseen data. Labels describe the method, not its quality." },
+      { id: "ranking", label: "ML ranking", hoverText: "Stored experiments rank stocks with a linear model and boosted trees retrained every month on matured data only. Their scores can be traded here next to the rule strategies; each has a model card with its evidence." },
+    ],
+    status: "beta",
+    phase: 13,
+  },
   history: {
     id: "history",
     route: "/history",

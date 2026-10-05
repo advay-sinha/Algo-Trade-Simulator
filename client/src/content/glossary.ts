@@ -307,6 +307,66 @@ export const GLOSSARY = {
     term: "Portfolio as held",
     definition: "Today's weights applied to each holding's past daily prices. It shows how the current mix would have behaved, not what your account actually did.",
   },
+  crossSectionalMomentum: {
+    term: "Cross-sectional momentum",
+    definition: "Ranks stocks against each other by their past return and holds the strongest. The common 12-1 version measures from 12 months ago to 1 month ago, skipping the latest month because very recent winners tend to give some back.",
+    formula: "score = adjusted close(t − skip) / adjusted close(t − lookback) − 1",
+    caveat: "Prone to sharp reversals (momentum crashes).",
+  },
+  timeSeriesMomentum: {
+    term: "Time-series momentum",
+    definition: "Looks at one stock on its own: long while its own trailing return is positive (or above a threshold). It doesn't compare stocks with each other.",
+  },
+  volTargeting: {
+    term: "Volatility targeting",
+    definition: "Sizes positions so the portfolio's volatility, estimated from recent daily returns, matches a target; calmer stocks get more weight and the book holds cash when markets are volatile.",
+    formula: "scale = target / √(wᵀ Σ w) × √252, capped at 100% gross",
+    caveat: "An estimate from past returns, not a guarantee of future volatility.",
+  },
+  turnover: {
+    term: "Turnover",
+    definition: "How much of the portfolio is traded. Annual turnover of 1 means trading roughly the whole portfolio's value once a year (buys and sells averaged).",
+    formula: "Σ |traded value| / 2 / average equity, scaled to 252 sessions",
+  },
+  survivorshipBias: {
+    term: "Survivorship bias",
+    definition: "Testing on today's index members leaves out the companies that failed or dropped out, so past results look better than an investor at the time could have achieved.",
+  },
+  participationCap: {
+    term: "Participation cap",
+    definition: "The most of a stock's recent average daily volume the simulation may trade in one session; larger orders are spread over several sessions.",
+  },
+  equalWeightBaseline: {
+    term: "Equal-weight baseline",
+    definition: "Every eligible stock in the universe at the same weight, rebalanced monthly under the same costs. A strategy has to beat this to show its selection adds anything.",
+  },
+  costStress: {
+    term: "Cost stress",
+    definition: "The same strategy rerun with every charge multiplied (2× by default) to see how much of the result survives higher trading costs.",
+  },
+  statutoryCharges: {
+    term: "Statutory charges",
+    definition: "Charges on NSE delivery trades besides brokerage: STT (0.1% each side), exchange transaction charge, SEBI fee, stamp duty on buys (0.015%), GST on brokerage and exchange/SEBI fees, and a DP charge per stock sold per day.",
+    caveat: "Rates change by circular; each has a source and check date in the fee schedule.",
+  },
+  maturity: {
+    term: "Maturity label",
+    definition: "Baseline: a reference method. Research: new, results unproven. Validated: passed criteria that were fixed before testing on unseen data. It describes the method, not how good the numbers look.",
+  },
+  researchSnapshot: {
+    term: "Research snapshot",
+    definition: "A frozen, versioned copy of daily prices, volumes and dividends for a universe. The version is a fingerprint of the data, so a run can be repeated exactly.",
+  },
+  rankIc: {
+    term: "Rank IC",
+    definition: "Rank information coefficient: the correlation between the order a model predicted for stocks and the order their returns actually came in, per decision date. 0 means no skill; even 0.03–0.05 sustained can matter, but noise is large.",
+    formula: "Spearman correlation(predicted scores, realised forward returns), averaged over dates",
+    caveat: "A good IC doesn't guarantee a profitable portfolio after costs.",
+  },
+  holdout: {
+    term: "Holdout",
+    definition: "The most recent block of dates, kept out of all model and setting choices and evaluated once at the end. Looking at it repeatedly turns it into another tuning set, so each look is counted.",
+  },
 } satisfies Record<string, GlossaryEntry>;
 
 export type GlossaryKey = keyof typeof GLOSSARY;

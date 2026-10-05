@@ -84,3 +84,8 @@ def search(query: str, limit: int = 10) -> List[Dict[str, Any]]:
         scored.append((score, entry["tier"], entry["symbol"], entry))
     scored.sort(key=lambda item: (-item[0], -item[1], item[2]))
     return [item[3] for item in scored[:limit]]
+
+
+def entries() -> List[Dict[str, Any]]:
+    """Every catalog entry (read-only view; used to build research universes)."""
+    return list(_catalog()["entries"].values())

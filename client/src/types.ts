@@ -899,3 +899,313 @@ export interface SectorCapex {
   coverage?: { reporting: number; total: number };
   sectors?: Array<{ sector: string; companies: number; years: Array<{ fiscalYear: string; capex: number; revenue: number; reporting: number; capexGrowth: number | null; capexToRevenue: number | null }> }>;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Strategy research (Phase 13): universe strategies, research datasets, runs and comparisons.
+
+export type Maturity = "baseline" | "research" | "validated";
+
+export interface ResearchParamSpec {
+  name: string;
+  label: string;
+  type: "integer" | "number" | "string" | string;
+  default?: number | string | null;
+  minimum?: number | null;
+  maximum?: number | null;
+  options?: string[] | null;
+  description?: string | null;
+}
+
+export interface StrategyMetadata {
+  executionMode: "single-asset" | "universe";
+  dataRequirements: string;
+  warmupSessions: number;
+  rebalance: string;
+  holdingHorizon: string;
+  riskControls: string[];
+  maturity: Maturity;
+  defaultTolerance?: number;
+  caveats?: string[];
+}
+
+export interface ResearchStrategy {
+  id: string;
+  name: string;
+  description: string;
+  parameters: ResearchParamSpec[];
+  metadata: StrategyMetadata;
+}
+
+export interface ResearchDataset {
+  version: string;
+  universe: string;
+  benchmarkSymbol: string;
+  source: string;
+  downloadedAt: string;
+  storedAt?: string;
+  survivorshipBiased: boolean;
+  caveats: string[];
+  period: { start: string; end: string; sessions: number };
+  symbolCount: number;
+  excludedDates?: { weekend: string[]; noTrading: string[] };
+  benchmarkCoverage?: { sessions: number; missing: number };
+  coverageSummary?: { symbols: number; lateListings: number; missingSessions: number; zeroVolumeSessions?: number };
+}
+
+export interface ResearchRunSettings {
+  datasetVersion: string;
+  start?: string;
+  end?: string;
+  capital: number;
+  feeSchedule: "nse-delivery" | "flat-bps";
+  brokerage: "zero" | "flat" | "bps";
+  brokerageFlatInr?: number;
+  brokerageBps?: number;
+  costBps?: number;
+  slippageBps: number;
+  participationCap: number;
+  minMedianTradedValueInr: number;
+  priceFloor: number;
+  cashBuffer?: number;
+  minTradeValue?: number;
+  riskFreeRate: number;
+}
+
+export interface ResearchStrategyChoice {
+  strategy: string;
+  params: Record<string, number | string>;
+  tolerance?: number;
+  label?: string;
+}
+
+export interface ResearchComparePayload extends ResearchRunSettings {
+  strategies: ResearchStrategyChoice[];
+  costStress: number;
+}
+
+export type ResearchMetrics = Partial<Record<"totalReturn" | "cagr" | "volatility" | "sharpe" | "sortino" | "maxDrawdown", number | null>>;
+
+export interface ResearchHeadline {
+  totalReturn: number | null;
+  cagr: number | null;
+  maxDrawdown: number | null;
+  sharpe: number | null;
+  annualTurnover: number | null;
+  totalCosts: number | null;
+  excessReturn: number | null;
+}
+
+export interface ResearchFill {
+  date: string;
+  symbol: string;
+  side: "buy" | "sell";
+  shares: number;
+  price: number;
+  notional: number;
+  costs: Record<string, number>;
+  costTotal: number;
+  realisedPnl: number | null;
+  decidedOn: string;
+  reason: string;
+  feeSchedule?: string;
+  feeVersion?: string;
+}
+
+export interface ResearchRunSummaryBlock {
+  startingCapital: number;
+  finalEquity: number;
+  totalReturn: number;
+  maxDrawdown: number;
+  realisedPnl: number;
+  unrealisedPnl: number;
+  dividends: number;
+  totalCosts: number;
+  costBreakdown: Record<string, number>;
+  tradedNotional: number;
+  turnover: number;
+  annualTurnover: number;
+  averageExposure: number;
+  fills: number;
+  staleMarks: number;
+  openPositions: number;
+}
+
+export interface ResearchSeriesPoint {
+  timestamp: string;
+  value: number;
+}
+
+export interface ResearchRunRecord {
+  id: string;
+  kind: "run";
+  label: string;
+  createdAt: string;
+  comparisonId?: string;
+  strategy: { id: string; name: string; params: Record<string, number | string>; metadata: StrategyMetadata };
+  dataset: { version: string; universe: string; benchmarkSymbol: string; period: { start: string; end: string; sessions: number }; survivorshipBiased: boolean };
+  settings: ResearchRunSettings;
+  tolerance: number;
+  costMultiplier: number;
+  engineVersion: number;
+  configHash: string;
+  resultHash: string;
+  period: { start: string; end: string; sessions: number };
+  summary: ResearchRunSummaryBlock;
+  metrics: ResearchMetrics;
+  metricReasons: Record<string, string>;
+  drawdown: { maxDrawdown?: number | null; peak?: string | null; trough?: string | null; recovery?: string | null; durationBars?: number; recovered?: boolean };
+  benchmark: { symbol: string; label: string; available: boolean; metrics?: ResearchMetrics; beta?: number | null; alpha?: number | null; correlation?: number | null; excessReturn?: number | null; missingSessions?: number };
+  series: { equity: ResearchSeriesPoint[]; drawdown: ResearchSeriesPoint[]; exposure: ResearchSeriesPoint[]; benchmark: ResearchSeriesPoint[] };
+  pending: Array<{ symbol: string; side: "buy" | "sell"; shares: number; decidedOn: string; reason?: string | null }>;
+  assumptions: Record<string, string>;
+  caveats: string[];
+  counts: { fills: number; fillsStored: number; holdingChanges: number; decisions: number; orderEvents: number; dividends: number };
+  manifest?: ResearchManifest;
+  tracking?: { enabled: boolean; logged?: boolean; runId?: string; url?: string; experiment?: string; artifactsUploaded?: string[] };
+  lastReplay?: ResearchReplay;
+}
+
+export interface ResearchManifest {
+  code: { commit: string; dirty: boolean; source: string };
+  dataset: { version: string; universe: string; benchmark: string; source?: string; downloadedAt?: string; survivorshipBiased: boolean; sectorCatalog?: string | null };
+  window: { start: string; end: string };
+  engine: { version: number; configHash: string; resultHash: string };
+  costs: { feeSchedule: string; feeVersions: string[]; brokerage: string; slippageBps: number; costMultiplier: number };
+  trial: { index: number; count: number };
+  artifacts?: Record<string, string>;
+}
+
+export interface ResearchReplay {
+  identical: boolean;
+  replayed: boolean;
+  reason?: string | null;
+  resultHash?: string;
+  storedResultHash?: string;
+  configHashMatches?: boolean;
+  maxAbsEquityDiff?: number | null;
+  checkedAt: string;
+}
+
+export interface ResearchComparisonRow {
+  runId: string;
+  label: string;
+  strategyId: string;
+  maturity: Maturity;
+  costMultiplier: number;
+  headline: ResearchHeadline;
+  metrics: ResearchMetrics;
+  summary: Partial<ResearchRunSummaryBlock>;
+}
+
+export interface ResearchComparison {
+  id: string;
+  kind: "comparison";
+  label: string;
+  createdAt: string;
+  dataset: ResearchRunRecord["dataset"];
+  settings: ResearchRunSettings;
+  costStress: number;
+  period: { start: string; end: string; sessions: number };
+  rows: ResearchComparisonRow[];
+  series: { runs: Array<{ runId: string; label: string; equity: ResearchSeriesPoint[] }>; benchmark: ResearchSeriesPoint[] };
+  benchmark: { symbol: string; label: string; metrics?: ResearchMetrics; available: boolean };
+  caveats: string[];
+  conventions: Record<string, string>;
+}
+
+export interface ResearchRunListItem {
+  id: string;
+  kind: "run" | "comparison";
+  label: string;
+  createdAt: string;
+  costMultiplier?: number;
+  comparisonId?: string;
+  period?: { start: string; end: string; sessions: number };
+  strategy?: { id: string; name: string; maturity: Maturity };
+  dataset?: { version: string; universe: string; survivorshipBiased: boolean };
+  headline?: ResearchHeadline;
+  runs?: Array<{ runId: string; label: string }>;
+  status?: { replayIdentical?: boolean | null; tracked?: boolean | null };
+}
+
+export interface RankingFamilySummary {
+  name: string;
+  maturity: Maturity;
+  validationMeanIc: number | null;
+  trainingCutoff: string | null;
+}
+
+export interface RankingExperimentSummary {
+  id: string;
+  createdAt: string;
+  dataset: { version: string; universe: string; survivorshipBiased: boolean; period?: { start: string; end: string; sessions: number } };
+  holdoutUses: number;
+  families: Record<string, RankingFamilySummary>;
+}
+
+export interface IcSummary {
+  meanIc: number | null;
+  icStd: number | null;
+  icTstat: number | null;
+  positiveShare: number | null;
+  dates: number;
+  topDecileSpread?: number | null;
+  icCi?: { low: number | null; high: number | null; draws: number };
+}
+
+export interface RankingTradingRow {
+  label: string;
+  metrics: ResearchMetrics;
+  turnover: number;
+  costs: number;
+  excessVsEqualWeight: number | null;
+  monthlyExcessCi?: { low: number | null; high: number | null; draws: number } | null;
+  maxDrawdownWorseThanIndex?: number | null;
+}
+
+export interface RankingFamily {
+  name: string;
+  params: Record<string, number | string>;
+  validation: IcSummary;
+  holdout?: IcSummary;
+  promotion: { maturity: Maturity; passed: boolean; criteria: Array<{ criterion: string; value: number | null; passed: boolean; reason?: string }> };
+  final: { trainingCutoff: string; trainRows: number; gate: { passed: boolean; checks: Array<{ check: string; passed: boolean; reason?: string }> }; artifactBytes: number };
+}
+
+export interface RankingExperiment {
+  id: string;
+  createdAt: string;
+  storedAt?: string;
+  dataset: RankingExperimentSummary["dataset"];
+  code: { commit: string; dirty: boolean };
+  seed: number;
+  config: Record<string, unknown>;
+  settings: ResearchRunSettings;
+  schemaHash: string;
+  featureFamilies: Array<{ family: string; description: string; features: string[] }>;
+  target: string;
+  panel: { rows: number; labelled: number; decisionDates: number };
+  split: Record<"development" | "validation" | "holdout", { start: string; end: string; dates: number }>;
+  trials: Array<{ index: number; count: number; kind: string; params: Record<string, number>; meanIc: number | null; icTstat: number | null }>;
+  families: Record<string, RankingFamily>;
+  validationTrading: { start: string; end: string; runs: Record<string, RankingTradingRow>; index?: ResearchMetrics } | null;
+  holdoutTrading: { start: string; end: string; runs: Record<string, RankingTradingRow>; index?: ResearchMetrics } | null;
+  holdoutUses: number;
+  criteria: Record<string, number>;
+  caveats: string[];
+}
+
+export interface ResearchFillsPage {
+  total: number;
+  totalInRun: number;
+  items: ResearchFill[];
+  orderEvents: Array<{ date: string; symbol: string; event: string; decidedOn: string }>;
+  dividends: Array<{ date: string; symbol: string; shares: number; perShare: number; amount: number }>;
+}
+
+export interface ResearchHoldings {
+  asOf: string | null;
+  positions: Array<{ symbol: string; shares: number }>;
+  decision: { date: string; weights: Array<{ symbol: string; weight: number }> } | null;
+  truncated?: boolean;
+}

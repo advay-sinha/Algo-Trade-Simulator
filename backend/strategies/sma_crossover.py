@@ -24,6 +24,8 @@ class SmaCrossover(Strategy):
     name = "Simple moving average crossover"
     description = "Long while the short moving average is above the long one; flat otherwise."
     params_model = SmaCrossoverParams
+    data_requirements = "Daily closes of one symbol; the long window must fill before the first signal."
+    holding_horizon = "Until the short average crosses back below the long one (typically weeks to months)."
 
     def min_history(self, params: SmaCrossoverParams) -> int:  # type: ignore[override]
         return params.longWindow

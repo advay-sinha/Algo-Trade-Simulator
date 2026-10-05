@@ -120,6 +120,10 @@ def backtest_summary(record: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
+# Fields a research run may gain after it is saved (everything else is immutable).
+RESEARCH_RUN_EXTRA_FIELDS = frozenset({"comparisonId", "tracking", "lastReplay"})
+
+
 class InMemoryStore:
     def __init__(self) -> None:
         self.lock = asyncio.Lock()
@@ -135,6 +139,10 @@ class InMemoryStore:
         self.portfolio_imports: Dict[str, Dict[str, Any]] = {}
         self.holdings: Dict[str, Dict[str, Any]] = {}
         self.market_flows: Dict[str, Dict[str, Any]] = {}
+        self.research_datasets: Dict[str, Dict[str, Any]] = {}
+        self.research_blobs: Dict[str, bytes] = {}
+        self.research_runs: Dict[str, Dict[str, Any]] = {}
+        self.ranking_experiments: Dict[str, Dict[str, Any]] = {}
 
     async def create_user(self, email: str, name: str, password: str) -> Dict[str, Any]:
         async with self.lock:
@@ -393,6 +401,81 @@ class InMemoryStore:
         async with self.lock:
             self.market_flows[f"{kind}:{day}"] = {"kind": kind, "date": day, "data": data, "source": source, "storedAt": now().isoformat()}
 
+    # Research runs and comparisons (Phase 13b): user-scoped.
+    async def add_research_run(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        async with self.lock:
+            stored = record | {"id": uuid.uuid4().hex, "userId": user_id, "createdAt": now().isoformat()}
+            self.research_runs[stored["id"]] = stored
+            return stored
+
+    async def get_research_run(self, user_id: str, run_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            record = self.research_runs.get(run_id)
+            return record if record and record["userId"] == user_id else None
+
+    async def list_research_runs(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        from backend.services.research_runs import summarize
+
+        async with self.lock:
+            records = [r for r in self.research_runs.values() if r["userId"] == user_id]
+        records.sort(key=lambda r: r["createdAt"], reverse=True)
+        return [summarize(r) for r in records[:limit]]
+
+    async def set_research_run_fields(self, user_id: str, run_id: str, fields: Dict[str, Any]) -> None:
+        allowed = {key: value for key, value in fields.items() if key in RESEARCH_RUN_EXTRA_FIELDS}
+        async with self.lock:
+            record = self.research_runs.get(run_id)
+            if record and record["userId"] == user_id:
+                record.update(allowed)
+
+    async def set_research_run_comparison(self, user_id: str, run_id: str, comparison_id: str) -> None:
+        await self.set_research_run_fields(user_id, run_id, {"comparisonId": comparison_id})
+
+    # Ranking experiments (Phase 13d): shared research models written by the training script.
+    async def add_ranking_experiment(self, record: Dict[str, Any], artifacts: Dict[str, bytes]) -> Dict[str, Any]:
+        async with self.lock:
+            experiment_id = uuid.uuid4().hex
+            for family, data in artifacts.items():
+                self.research_blobs[f"ranking:{experiment_id}:{family}"] = data
+            stored = record | {"id": experiment_id, "storedAt": now().isoformat(), "artifactFamilies": sorted(artifacts)}
+            self.ranking_experiments[experiment_id] = stored
+            return stored
+
+    async def get_ranking_experiment(self, experiment_id: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            return self.ranking_experiments.get(experiment_id)
+
+    async def list_ranking_experiments(self) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = list(self.ranking_experiments.values())
+        return sorted(records, key=lambda r: r["storedAt"], reverse=True)
+
+    async def get_ranking_artifact(self, experiment_id: str, family: str) -> Optional[bytes]:
+        async with self.lock:
+            return self.research_blobs.get(f"ranking:{experiment_id}:{family}")
+
+    # Research datasets (Phase 13): shared, immutable snapshots keyed by content version.
+    async def add_research_dataset(self, meta: Dict[str, Any], blob: bytes) -> Dict[str, Any]:
+        async with self.lock:
+            version = meta["version"]
+            if version not in self.research_datasets:
+                self.research_blobs[version] = blob
+                self.research_datasets[version] = meta | {"storedAt": now().isoformat(), "sizeBytes": len(blob)}
+            return self.research_datasets[version]
+
+    async def get_research_dataset(self, version: str) -> Optional[Dict[str, Any]]:
+        async with self.lock:
+            return self.research_datasets.get(version)
+
+    async def list_research_datasets(self) -> List[Dict[str, Any]]:
+        async with self.lock:
+            records = list(self.research_datasets.values())
+        return sorted(records, key=lambda r: r["storedAt"], reverse=True)
+
+    async def get_research_dataset_blob(self, version: str) -> Optional[bytes]:
+        async with self.lock:
+            return self.research_blobs.get(version)
+
     async def list_flow_snapshots(self, kind: str, limit: int = 60) -> List[Dict[str, Any]]:
         async with self.lock:
             records = [dict(record) for record in self.market_flows.values() if record["kind"] == kind]
@@ -442,8 +525,13 @@ class MongoStore:
         self.portfolio_imports = self.db["portfolio_imports"]
         self.holdings = self.db["holdings"]
         self.market_flows = self.db["market_flows"]
+        self.research_datasets = self.db["research_datasets"]
+        self.research_runs = self.db["research_runs"]
+        self.ranking_experiments = self.db["ranking_experiments"]
         # Model artifacts live in GridFS (never on local disk: serverless filesystems are ephemeral).
         self.artifacts = AsyncIOMotorGridFSBucket(self.db, bucket_name="model_artifacts") if AsyncIOMotorGridFSBucket else None
+        self.research_snapshots = AsyncIOMotorGridFSBucket(self.db, bucket_name="research_snapshots") if AsyncIOMotorGridFSBucket else None
+        self.ranking_models = AsyncIOMotorGridFSBucket(self.db, bucket_name="ranking_models") if AsyncIOMotorGridFSBucket else None
         self._indexes_ready = False
 
     async def init(self) -> None:
@@ -462,6 +550,7 @@ class MongoStore:
         await self.portfolio_imports.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
         await self.holdings.create_index([("userId", ASCENDING or 1), ("importId", ASCENDING or 1)])
         await self.market_flows.create_index([("kind", ASCENDING or 1), ("date", DESCENDING or -1)])
+        await self.research_runs.create_index([("userId", ASCENDING or 1), ("createdAt", DESCENDING or -1)])
         # Sessions created before token hashing stored the raw token (as _id and/or a token
         # field). Those are replayable if leaked, so invalidate them; users simply sign in again.
         legacy = await self.sessions.delete_many(
@@ -815,6 +904,96 @@ class MongoStore:
     async def upsert_flow_snapshot(self, kind: str, day: str, data: Dict[str, Any], source: str) -> None:
         record = {"kind": kind, "date": day, "data": data, "source": source, "storedAt": now().isoformat()}
         await self.market_flows.update_one({"_id": f"{kind}:{day}"}, {"$set": record}, upsert=True)
+
+    # Research runs and comparisons (Phase 13b): user-scoped documents (lists are capped by the service).
+    async def add_research_run(self, user_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+        run_id = uuid.uuid4().hex
+        document = record | {"_id": run_id, "userId": user_id, "createdAt": now().isoformat()}
+        await self.research_runs.insert_one(document)
+        return self._format_plain(document) | {"id": run_id}
+
+    async def get_research_run(self, user_id: str, run_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.research_runs.find_one({"_id": run_id, "userId": user_id})
+        return self._format_plain(document) | {"id": run_id} if document else None
+
+    async def list_research_runs(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        from backend.services.research_runs import summarize
+
+        projection = {"fills": 0, "holdings": 0, "decisions": 0, "series": 0, "orderEvents": 0, "dividends": 0, "feeSchedule": 0}
+        cursor = self.research_runs.find({"userId": user_id}, projection).sort("createdAt", DESCENDING or -1).limit(limit)
+        return [summarize(self._format_plain(document) | {"id": document["_id"]}) async for document in cursor]
+
+    async def set_research_run_fields(self, user_id: str, run_id: str, fields: Dict[str, Any]) -> None:
+        allowed = {key: value for key, value in fields.items() if key in RESEARCH_RUN_EXTRA_FIELDS}
+        if allowed:
+            await self.research_runs.update_one({"_id": run_id, "userId": user_id}, {"$set": allowed})
+
+    async def set_research_run_comparison(self, user_id: str, run_id: str, comparison_id: str) -> None:
+        await self.set_research_run_fields(user_id, run_id, {"comparisonId": comparison_id})
+
+    # Ranking experiments (Phase 13d): shared documents; fitted models in GridFS `ranking_models`.
+    async def add_ranking_experiment(self, record: Dict[str, Any], artifacts: Dict[str, bytes]) -> Dict[str, Any]:
+        if self.ranking_models is None:  # pragma: no cover - motor always ships GridFS
+            raise RuntimeError("GridFS is unavailable")
+        experiment_id = uuid.uuid4().hex
+        artifact_ids = {}
+        for family, data in artifacts.items():
+            artifact_ids[family] = await self.ranking_models.upload_from_stream(f"{experiment_id}-{family}.joblib", data, metadata={"experiment": experiment_id})
+        document = record | {"_id": experiment_id, "storedAt": now().isoformat(), "artifactFamilies": sorted(artifacts), "artifactIds": artifact_ids}
+        await self.ranking_experiments.insert_one(document)
+        return self._format_experiment(document)
+
+    @staticmethod
+    def _format_experiment(document: Dict[str, Any]) -> Dict[str, Any]:
+        return {"id": str(document["_id"])} | {key: value for key, value in document.items() if key not in ("_id", "artifactIds")}
+
+    async def get_ranking_experiment(self, experiment_id: str) -> Optional[Dict[str, Any]]:
+        document = await self.ranking_experiments.find_one({"_id": experiment_id})
+        return self._format_experiment(document) if document else None
+
+    async def list_ranking_experiments(self) -> List[Dict[str, Any]]:
+        cursor = self.ranking_experiments.find({}, {"predictions": 0, "validationTrading": 0, "holdoutTrading": 0, "trials": 0}).sort("storedAt", DESCENDING or -1)
+        return [self._format_experiment(document) async for document in cursor]
+
+    async def get_ranking_artifact(self, experiment_id: str, family: str) -> Optional[bytes]:
+        document = await self.ranking_experiments.find_one({"_id": experiment_id}, {"artifactIds": 1})
+        blob_id = (document or {}).get("artifactIds", {}).get(family)
+        if blob_id is None or self.ranking_models is None:
+            return None
+        stream = await self.ranking_models.open_download_stream(blob_id)
+        return await stream.read()
+
+    # Research datasets (Phase 13): metadata document + snapshot bytes in GridFS.
+    async def add_research_dataset(self, meta: Dict[str, Any], blob: bytes) -> Dict[str, Any]:
+        if self.research_snapshots is None:  # pragma: no cover - motor always ships GridFS
+            raise RuntimeError("GridFS is unavailable")
+        version = meta["version"]
+        existing = await self.get_research_dataset(version)
+        if existing is not None:
+            return existing
+        blob_id = await self.research_snapshots.upload_from_stream(f"{version}.npz", blob, metadata={"version": version})
+        document = meta | {"_id": version, "blobId": blob_id, "storedAt": now().isoformat(), "sizeBytes": len(blob)}
+        await self.research_datasets.insert_one(document)
+        return self._format_dataset(document)
+
+    @staticmethod
+    def _format_dataset(document: Dict[str, Any]) -> Dict[str, Any]:
+        return {key: value for key, value in document.items() if key not in ("_id", "blobId")}
+
+    async def get_research_dataset(self, version: str) -> Optional[Dict[str, Any]]:
+        document = await self.research_datasets.find_one({"_id": version})
+        return self._format_dataset(document) if document else None
+
+    async def list_research_datasets(self) -> List[Dict[str, Any]]:
+        cursor = self.research_datasets.find({}, {"coverage": 0}).sort("storedAt", DESCENDING or -1)
+        return [self._format_dataset(document) async for document in cursor]
+
+    async def get_research_dataset_blob(self, version: str) -> Optional[bytes]:
+        document = await self.research_datasets.find_one({"_id": version}, {"blobId": 1})
+        if not document or self.research_snapshots is None:
+            return None
+        stream = await self.research_snapshots.open_download_stream(document["blobId"])
+        return await stream.read()
 
     async def list_flow_snapshots(self, kind: str, limit: int = 60) -> List[Dict[str, Any]]:
         cursor = self.market_flows.find({"kind": kind}, {"_id": 0}).sort("date", DESCENDING or -1).limit(limit)
